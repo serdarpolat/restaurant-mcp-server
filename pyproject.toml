@@ -12,6 +12,7 @@ dependencies = [
     "httpx>=0.27",
     "mcp>=2.3,<3",
     "python-dotenv>=1.0",
+    "tzdata>=2024.1",  # timezone database for Windows
 ]
 
 [project.optional-dependencies]
@@ -31,6 +32,7 @@ packages = ["src/pos_api", "src/pos_mcp"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 line-length = 100
