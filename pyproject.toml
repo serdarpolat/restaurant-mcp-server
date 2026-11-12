@@ -15,6 +15,14 @@ dependencies = [
     "tzdata>=2024.1",  # timezone database for Windows
 ]
 
+[project.scripts]
+restaurant-pos-mcp = "pos_mcp.server:main"
+restaurant-pos-api = "pos_api.cli:main"
+restaurant-pos-seed = "pos_api.db.seed:main"
+
+[project.urls]
+Repository = "https://github.com/serdarpolat/restaurant-mcp-server"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",

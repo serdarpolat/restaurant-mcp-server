@@ -21,10 +21,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import random
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy.engine import Engine
@@ -938,6 +939,36 @@ def seed(
                 f"over {days} days (until {now:%Y-%m-%d %H:%M})."
             )
             print("Below reorder level:", ", ".join(i.name for i in low) or "none")
+
+
+def ensure_demo_data(
+    db_engine: Engine | None = None,
+    days: int = DAYS,
+    max_age_days: int = 1,
+    now: datetime | None = None,
+) -> str:
+    """Make sure the demo database exists and is recent.
+
+    Seeds an empty database, and regenerates one whose newest order is older than
+    `max_age_days` so that "today" always has data when someone tries the project.
+    Set POS_DEMO_REFRESH=0 to keep an old database untouched.
+    Returns "seeded", "refreshed" or "fresh".
+    """
+    now = now or datetime.now(RESTAURANT_TZ).replace(microsecond=0)
+    db_engine = db_engine or engine
+    create_db_and_tables(db_engine)
+    with Session(db_engine) as session:
+        newest = session.exec(select(Order.opened_at).order_by(Order.opened_at.desc())).first()
+    if newest is None:
+        seed(days=days, db_engine=db_engine, now=now, verbose=False)
+        return "seeded"
+    if newest.tzinfo is None:
+        newest = newest.replace(tzinfo=UTC)
+    stale = now - newest > timedelta(days=max_age_days)
+    if stale and os.getenv("POS_DEMO_REFRESH", "1") != "0":
+        seed(reset=True, days=days, db_engine=db_engine, now=now, verbose=False)
+        return "refreshed"
+    return "fresh"
 
 
 def main() -> None:

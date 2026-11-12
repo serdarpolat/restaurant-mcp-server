@@ -1,40 +1,84 @@
 # Restaurant MCP Server
 
+[![CI](https://github.com/serdarpolat/restaurant-mcp-server/actions/workflows/ci.yml/badge.svg)](https://github.com/serdarpolat/restaurant-mcp-server/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+
 > Connect AI assistants (Claude, etc.) to a realistic restaurant POS system through the
 > [Model Context Protocol](https://modelcontextprotocol.io).
-
-**Status:** 🚧 Work in progress
-
-## What it does
 
 Ask your AI assistant things like:
 
 - "What were our best-selling items today?"
-- "Which ingredients are running low?"
-- "Add 2 Adana kebabs to table 5."
+- "Which ingredients are running low, and why is the minced meat almost gone?"
+- "Add 2 Adana kebabs and 2 ayran to a free table." (it asks for the spice level)
+- "Cancel that order." (it asks *you* to approve first)
+
+## Try it in 2 minutes
+
+Pick one. Each option creates its own demo database (90 days of realistic sales) on first
+start, which takes about 15 seconds. The demo data is regenerated when it is more than a day
+old, so "today" always has sales.
+
+### Option 1: Claude Desktop, zero setup (recommended)
+
+Needs only [uv](https://docs.astral.sh/uv/getting-started/installation/) and git. Add this to
+`claude_desktop_config.json` (Windows: `%APPDATA%\Claude\`, macOS:
+`~/Library/Application Support/Claude/`) and restart Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "restaurant-pos": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/serdarpolat/restaurant-mcp-server",
+        "restaurant-pos-mcp"
+      ]
+    }
+  }
+}
+```
+
+No API to start: in this mode the POS API runs embedded inside the MCP server process.
+
+### Option 2: Docker
+
+```bash
+git clone https://github.com/serdarpolat/restaurant-mcp-server
+cd restaurant-mcp-server
+docker compose up
+```
+
+- POS API with interactive docs: http://localhost:8000/docs
+- MCP server over Streamable HTTP: http://localhost:8001/mcp
+
+### Option 3: From source
+
+```bash
+git clone https://github.com/serdarpolat/restaurant-mcp-server
+cd restaurant-mcp-server
+uv sync --extra dev
+uv run pytest                 # 32 tests
+uv run restaurant-pos-api     # http://127.0.0.1:8000/docs
+uv run restaurant-pos-mcp     # MCP server over stdio
+```
+
+Without uv: `python -m venv .venv`, activate it, then `pip install -e ".[dev]"` and run the
+same commands without `uv run`.
 
 ## Architecture
 
 ```
-Claude Desktop  ──MCP──▶  pos_mcp (MCP server)  ──HTTP──▶  pos_api (mock POS, FastAPI)  ──▶  SQLite
+                         stdio / Streamable HTTP
+Claude Desktop  ──MCP──▶  pos_mcp (MCP server)  ──HTTP──▶  pos_api (FastAPI)  ──▶  SQLite
+                          20 tools, approvals             business rules, audit log
 ```
 
-- `src/pos_api` — a mock restaurant POS REST API with realistic seed data
-- `src/pos_mcp` — the MCP server exposing POS capabilities as tools, resources and prompts.
-  It holds no business logic and never touches the database; it only calls the API.
-
-## Quick start
-
-```bash
-python -m venv .venv
-.venv\Scripts\activate          # Windows
-pip install -e ".[dev]"
-python -m pos_api.db.seed --reset   # generate 90 days of realistic data
-uvicorn pos_api.main:app --reload
-pytest                               # 31 tests
-```
-
-Then open http://127.0.0.1:8000/docs
+- `src/pos_api` — a mock restaurant POS REST API with realistic seed data.
+- `src/pos_mcp` — the MCP server. It holds no business logic and never touches the database;
+  it only calls the API (over HTTP when `POS_API_URL` is set, in-process otherwise).
 
 ## The MCP server
 
@@ -64,34 +108,9 @@ Cancelling, voiding, taking payment and changing stock never run on the model's 
 
 Every write is recorded in the audit log with the actor `mcp:assistant`.
 
-### Use it from Claude Desktop
-
-1. Start the POS API: `uvicorn pos_api.main:app`
-2. Add the server to `%APPDATA%\Claude\claude_desktop_config.json` (Windows) or
-   `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS), using the
-   Python of your virtual environment:
-
-```json
-{
-  "mcpServers": {
-    "restaurant-pos": {
-      "command": "C:\\path\\to\\restaurant-mcp-server\\.venv\\Scripts\\python.exe",
-      "args": ["-m", "pos_mcp.server"],
-      "env": { "POS_API_URL": "http://127.0.0.1:8000" }
-    }
-  }
-}
-```
-
-3. Restart Claude Desktop and try:
-   - "Bugün en çok satan 5 ürün ne?"
-   - "Hangi malzemeler kritik seviyede? Kıyma neden azaldı?"
-   - "Boş bir masaya 2 Adana ve 2 ayran yaz." (it should ask you for the spice level)
-
 ## The POS API
 
-Run `uvicorn pos_api.main:app --reload` and open http://127.0.0.1:8000/docs for the
-interactive docs.
+Run `restaurant-pos-api` and open http://127.0.0.1:8000/docs for the interactive docs.
 
 | Area | Endpoints |
 |---|---|
@@ -135,8 +154,8 @@ Timestamps are timezone-aware (`RESTAURANT_TZ`, default `Europe/Istanbul`).
 - [x] Data model & seed data
 - [x] Mock POS API
 - [x] MCP server (read tools, write tools with confirmation)
-- [ ] Tests & evals
-- [ ] Docker
+- [x] Tests, CI (Linux + Windows), Docker, uv
+- [ ] Evals: does the model pick the right tool?
 - [ ] Demo video
 
 ## License

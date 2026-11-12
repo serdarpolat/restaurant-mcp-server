@@ -1,8 +1,13 @@
 """MCP server exposing the restaurant POS to AI assistants.
 
-Run with:  python -m pos_mcp.server   (stdio transport; the POS API must be running)
+Run with:  restaurant-pos-mcp   (stdio transport)
+
+Without POS_API_URL the POS API is embedded in this process (zero setup).
+With POS_API_URL it talks to a running POS API over HTTP.
 """
 
+import argparse
+import logging
 import os
 from datetime import datetime
 from typing import Annotated, Any, Literal
@@ -412,7 +417,19 @@ def stock_investigation(ingredient: str) -> str:
 
 
 def main() -> None:
-    mcp.run()
+    parser = argparse.ArgumentParser(description="Restaurant POS MCP server.")
+    parser.add_argument("--http", action="store_true", help="Serve over Streamable HTTP.")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8001)
+    args = parser.parse_args()
+
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    if not api.POS_API_URL:
+        api.prepare_embedded()
+    if args.http:
+        mcp.run(transport="streamable-http", host=args.host, port=args.port)
+    else:
+        mcp.run()
 
 
 if __name__ == "__main__":

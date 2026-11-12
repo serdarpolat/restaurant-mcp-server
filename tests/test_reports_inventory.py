@@ -53,3 +53,19 @@ def test_low_stock_and_purchase(client):
 
     moves = client.get(f"/inventory/ingredients/{target['id']}/movements").json()
     assert moves[0]["reason"] == "purchase"
+
+
+def test_demo_data_is_seeded_once_and_refreshed_when_stale(tmp_path):
+    from datetime import datetime
+
+    from sqlmodel import create_engine
+
+    from pos_api.db.database import RESTAURANT_TZ
+    from pos_api.db.seed import ensure_demo_data
+
+    eng = create_engine(f"sqlite:///{tmp_path / 'demo.db'}")
+    now = datetime.now(RESTAURANT_TZ).replace(microsecond=0)
+    assert ensure_demo_data(eng, days=2, now=now - timedelta(days=10)) == "seeded"
+    assert ensure_demo_data(eng, days=2, now=now - timedelta(days=10)) == "fresh"
+    assert ensure_demo_data(eng, days=2, now=now) == "refreshed"
+    eng.dispose()
