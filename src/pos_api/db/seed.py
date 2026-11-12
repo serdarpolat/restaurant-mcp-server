@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
+from sqlalchemy.engine import Engine
 from sqlmodel import Session, select
 
 from pos_api.db.database import (
@@ -500,6 +501,7 @@ class Ctx:
     waiters: list[Staff]
     cashier: Staff
     tables: list[DiningTable]
+    days: int = DAYS
 
 
 def weighted_pick(rng: random.Random, options: dict[str, float]) -> str:
@@ -519,7 +521,7 @@ def item_weights(ctx: Ctx, categories: set[str], day: date, day_index: int) -> d
         if name == "Çay":
             weight *= 0.4 + 1.6 * (1 - w)
         if name == "Beyti":  # rising star: x1 -> x3 over the period
-            weight *= 1 + 2 * day_index / DAYS
+            weight *= 1 + 2 * day_index / ctx.days
         out[name] = weight
     return out
 
@@ -667,16 +669,16 @@ def seed_orders(session: Session, ctx: Ctx, now: datetime) -> dict[date, dict[st
     """Create orders/items/payments. Returns daily ingredient consumption."""
     rng = ctx.rng
     today = now.date()
-    start = today - timedelta(days=DAYS - 1)
+    start = today - timedelta(days=ctx.days - 1)
     price_change_day = today - timedelta(days=PRICE_INCREASE_DAYS_AGO)
     waiter_weights = [WAITER_WEIGHTS[w.name] for w in ctx.waiters]
     consumption: dict[date, dict[str, Decimal]] = defaultdict(lambda: defaultdict(D))
     open_tables: set[int] = set()
 
-    for day_index in range(DAYS):
+    for day_index in range(ctx.days):
         day = start + timedelta(days=day_index)
         factor = WEEKDAY_FACTOR[day.weekday()] * HOLIDAYS.get((day.month, day.day), 1.0)
-        factor *= 1 + 0.08 * day_index / DAYS  # gentle growth trend
+        factor *= 1 + 0.08 * day_index / ctx.days  # gentle growth trend
         n_orders = round(BASE_ORDERS_PER_DAY * factor * rng.uniform(0.9, 1.1))
 
         hours = rng.choices(list(HOUR_WEIGHTS), weights=list(HOUR_WEIGHTS.values()), k=n_orders)
@@ -902,37 +904,48 @@ def seed_stock(
         ing.stock_qty = q3(stock)
 
 
-def seed(reset: bool = False, now: datetime | None = None) -> None:
+def seed(
+    reset: bool = False,
+    now: datetime | None = None,
+    days: int = DAYS,
+    db_engine: Engine | None = None,
+    verbose: bool = True,
+) -> None:
     now = now or datetime.now(RESTAURANT_TZ).replace(microsecond=0)
+    db_engine = db_engine or engine
     if reset:
-        drop_db_and_tables()
-    create_db_and_tables()
+        drop_db_and_tables(db_engine)
+    create_db_and_tables(db_engine)
 
-    with Session(engine) as session:
+    with Session(db_engine) as session:
         if session.exec(select(Category)).first():
-            print("Database already seeded. Use --reset to reseed.")
+            if verbose:
+                print("Database already seeded. Use --reset to reseed.")
             return
         ctx = seed_reference_data(session)
+        ctx.days = days
         consumption = seed_orders(session, ctx, now)
         seed_stock(session, ctx, consumption, now)
         session.commit()
 
-        n_orders = len(session.exec(select(Order.id)).all())
-        low = session.exec(
-            select(Ingredient).where(Ingredient.stock_qty < Ingredient.reorder_level)
-        ).all()
-        print(
-            f"Seeded {len(MENU)} menu items, {len(TABLES)} tables, {n_orders} orders "
-            f"over {DAYS} days (until {now:%Y-%m-%d %H:%M})."
-        )
-        print("Below reorder level:", ", ".join(i.name for i in low) or "none")
+        if verbose:
+            n_orders = len(session.exec(select(Order.id)).all())
+            low = session.exec(
+                select(Ingredient).where(Ingredient.stock_qty < Ingredient.reorder_level)
+            ).all()
+            print(
+                f"Seeded {len(MENU)} menu items, {len(TABLES)} tables, {n_orders} orders "
+                f"over {days} days (until {now:%Y-%m-%d %H:%M})."
+            )
+            print("Below reorder level:", ", ".join(i.name for i in low) or "none")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Seed the mock restaurant POS database.")
     parser.add_argument("--reset", action="store_true", help="Drop all tables and reseed.")
+    parser.add_argument("--days", type=int, default=DAYS, help="Days of history to generate.")
     args = parser.parse_args()
-    seed(reset=args.reset)
+    seed(reset=args.reset, days=args.days)
 
 
 if __name__ == "__main__":

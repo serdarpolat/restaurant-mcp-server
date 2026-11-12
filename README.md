@@ -30,9 +30,35 @@ python -m venv .venv
 pip install -e ".[dev]"
 python -m pos_api.db.seed --reset   # generate 90 days of realistic data
 uvicorn pos_api.main:app --reload
+pytest                               # 23 tests
 ```
 
 Then open http://127.0.0.1:8000/docs
+
+## The POS API
+
+Run `uvicorn pos_api.main:app --reload` and open http://127.0.0.1:8000/docs for the
+interactive docs.
+
+| Area | Endpoints |
+|---|---|
+| Menu | `GET /menu/categories`, `GET /menu/items?search=`, `GET /menu/items/{id}` |
+| Tables | `GET /tables?status=`, `GET /tables/{id}`, `PATCH /tables/{id}` |
+| Orders | `GET /orders`, `GET /orders/{id}`, `POST /orders`, `POST /orders/{id}/items`, `POST /orders/{id}/items/{item_id}/void`, `POST /orders/{id}/pay`, `POST /orders/{id}/cancel` |
+| Inventory | `GET /inventory/ingredients?below_reorder=`, `GET /inventory/ingredients/{id}/movements`, `POST /inventory/purchases` |
+| Reports | `GET /reports/sales?group_by=day\|hour\|weekday\|channel`, `GET /reports/top-items`, `GET /reports/staff`, `GET /reports/voids`, `GET /reports/daily-summary` |
+| Audit | `GET /audit-log` |
+
+Design choices that matter when an AI agent is the client:
+
+- **Errors that help the agent recover.** A missing required option returns the valid
+  choices (`'Adana Kebap' needs 1-1 choice(s) for 'Acı Seviyesi'. Options: Acılı (id=1), ...`),
+  so the agent can ask the user instead of guessing.
+- **Business rules live in the API, not in the prompt.** One open order per table, no
+  overselling stock, discounts need a reason, paid orders are immutable.
+- **Turkish-aware search.** `iskender` finds `İskender`, `cay` finds `Çay`.
+- **Audit trail.** Every write records who did it (`X-Actor` header) in the audit log.
+- **Local time everywhere.** The DB stores UTC; reports group by the restaurant's local day.
 
 ## The data
 
@@ -54,7 +80,7 @@ Timestamps are timezone-aware (`RESTAURANT_TZ`, default `Europe/Istanbul`).
 ## Roadmap
 
 - [x] Data model & seed data
-- [ ] Mock POS API
+- [x] Mock POS API
 - [ ] MCP server (read tools, write tools with confirmation)
 - [ ] Tests & evals
 - [ ] Docker

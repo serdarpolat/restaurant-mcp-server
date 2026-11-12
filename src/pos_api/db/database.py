@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
+from sqlalchemy.engine import Engine
 from sqlmodel import Session, SQLModel, create_engine
 
 load_dotenv()
@@ -18,17 +19,17 @@ engine = create_engine(
 )
 
 
-def create_db_and_tables() -> None:
+def create_db_and_tables(db_engine: Engine | None = None) -> None:
     # Import models so they are registered on SQLModel.metadata
     from pos_api.db import models  # noqa: F401
 
-    SQLModel.metadata.create_all(engine)
+    SQLModel.metadata.create_all(db_engine or engine)
 
 
-def drop_db_and_tables() -> None:
+def drop_db_and_tables(db_engine: Engine | None = None) -> None:
     from pos_api.db import models  # noqa: F401
 
-    SQLModel.metadata.drop_all(engine)
+    SQLModel.metadata.drop_all(db_engine or engine)
 
 
 def get_session() -> Iterator[Session]:
