@@ -20,7 +20,8 @@ Claude Desktop  ──MCP──▶  pos_mcp (MCP server)  ──HTTP──▶  p
 ```
 
 - `src/pos_api` — a mock restaurant POS REST API with realistic seed data
-- `src/pos_mcp` — the MCP server exposing POS capabilities as tools, resources and prompts
+- `src/pos_mcp` — the MCP server exposing POS capabilities as tools, resources and prompts.
+  It holds no business logic and never touches the database; it only calls the API.
 
 ## Quick start
 
@@ -30,10 +31,62 @@ python -m venv .venv
 pip install -e ".[dev]"
 python -m pos_api.db.seed --reset   # generate 90 days of realistic data
 uvicorn pos_api.main:app --reload
-pytest                               # 23 tests
+pytest                               # 31 tests
 ```
 
 Then open http://127.0.0.1:8000/docs
+
+## The MCP server
+
+20 tools, 1 resource and 2 prompts, built with the MCP Python SDK 2.x.
+
+| Kind | Tools |
+|---|---|
+| Read (13) | `get_current_time`, `search_menu`, `get_menu_item`, `list_tables`, `list_orders`, `get_order`, `get_daily_summary`, `get_sales_report`, `get_top_items`, `get_staff_performance`, `get_void_report`, `get_inventory`, `get_stock_movements` |
+| Write (3) | `create_order`, `add_items_to_order`, `set_table_status` |
+| Write, needs approval (4) | `void_order_item`, `cancel_order`, `pay_order`, `record_stock_purchase` |
+
+Resource: `restaurant://menu` · Prompts: `daily_briefing`, `stock_investigation`
+
+### Human-in-the-loop for risky actions
+
+Cancelling, voiding, taking payment and changing stock never run on the model's say-so alone:
+
+1. **Elicitation.** If the client supports it, the server asks the *user* to approve through
+   the client's own UI, with a preview such as
+   `Cancel order #9457 (Bahçe 3, 4 lines, 1,640.00 TRY). Reason: ...`. The model cannot answer
+   for the user.
+2. **Preview + token fallback.** Otherwise the first call changes nothing and returns the
+   preview plus a short-lived token bound to the exact arguments. Only a second call with that
+   token executes, so what runs is exactly what was previewed. (In this mode, asking the user
+   in between relies on the model following the tool instructions; elicitation is the hard
+   guarantee.)
+
+Every write is recorded in the audit log with the actor `mcp:assistant`.
+
+### Use it from Claude Desktop
+
+1. Start the POS API: `uvicorn pos_api.main:app`
+2. Add the server to `%APPDATA%\Claude\claude_desktop_config.json` (Windows) or
+   `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS), using the
+   Python of your virtual environment:
+
+```json
+{
+  "mcpServers": {
+    "restaurant-pos": {
+      "command": "C:\\path\\to\\restaurant-mcp-server\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "pos_mcp.server"],
+      "env": { "POS_API_URL": "http://127.0.0.1:8000" }
+    }
+  }
+}
+```
+
+3. Restart Claude Desktop and try:
+   - "Bugün en çok satan 5 ürün ne?"
+   - "Hangi malzemeler kritik seviyede? Kıyma neden azaldı?"
+   - "Boş bir masaya 2 Adana ve 2 ayran yaz." (it should ask you for the spice level)
 
 ## The POS API
 
@@ -81,7 +134,7 @@ Timestamps are timezone-aware (`RESTAURANT_TZ`, default `Europe/Istanbul`).
 
 - [x] Data model & seed data
 - [x] Mock POS API
-- [ ] MCP server (read tools, write tools with confirmation)
+- [x] MCP server (read tools, write tools with confirmation)
 - [ ] Tests & evals
 - [ ] Docker
 - [ ] Demo video
