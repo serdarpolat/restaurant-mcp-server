@@ -9,12 +9,13 @@ With POS_API_URL it talks to a running POS API over HTTP.
 import argparse
 import logging
 import os
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo
 
 from mcp.server.elicitation import ElicitationResult
 from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.mcpserver.resolve import Elicit, Resolve
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
@@ -30,10 +31,16 @@ You are connected to the POS of a Turkish kebab restaurant.
 - Currency is Turkish Lira (TRY). All dates and times are restaurant local time.
 - Call get_current_time before resolving relative dates such as "yesterday" or "last week",
   and always pass the dates: report tools default to TODAY when no date is given.
+- Dates: take the year from get_current_time. Dates in the future or more than a year back
+  are refused.
 - Never guess ids; take them from a lookup. Menu items and option ids: search_menu and
-  get_menu_item. Tables and their open order: list_tables (open_order_id). Ingredients:
-  get_inventory(search=...). The number in a table name ("Teras 1") is not its id, and a menu
-  item id is never an ingredient id.
+  get_menu_item. Tables: list_tables (table_id, and open_order_id for the table's order).
+  Ingredients: get_inventory(search=...) (ingredient_id). The number in a table name
+  ("Teras 1") is not its id, a table id is not an order id, and a menu item id is never an
+  ingredient id. Tools that take a table or ingredient id also take its name and check that
+  the two match.
+- "Paket", "paket servis" or "gel al" = channel takeaway; "kurye", "eve" = delivery. Neither
+  needs a table, so do not ask for one.
 - Options: if the user already named an option in their own words ("acılı Adana",
   "3 acısız lahmacun", "büyük ayran"), use that option's id. Ask only for REQUIRED option
   groups (min_select >= 1) the user did not mention; never ask about optional groups
@@ -59,13 +66,26 @@ Date = Annotated[
     Field(description="Local date, YYYY-MM-DD. Omit both dates = today only; one date = that day."),
 ]
 OrderId = Annotated[
-    int, Field(description="Order id. For a table's open order use list_tables.open_order_id.")
+    int,
+    Field(
+        description="Order id. For a table's open order use list_tables.open_order_id (not table_id)."
+    ),
 ]
 TableId = Annotated[
-    int, Field(description="Table id from list_tables (not the number in its name).")
+    int, Field(description="table_id from list_tables (not the number in its name).")
+]
+TableName = Annotated[
+    str,
+    Field(
+        description="The table's name as the user said it, e.g. 'Teras 1'. Checked against table_id."
+    ),
 ]
 IngredientId = Annotated[
-    int, Field(description="Ingredient id from get_inventory (never a menu item id).")
+    int, Field(description="ingredient_id from get_inventory (never a menu item id).")
+]
+IngredientName = Annotated[
+    str,
+    Field(description="The ingredient's name, e.g. 'Dana Kıyma'. Checked against ingredient_id."),
 ]
 Category = Annotated[
     str | None,
@@ -113,6 +133,87 @@ def _period(date_from: str | None, date_to: str | None) -> dict[str, str]:
     return {"date_from": min(start, end), "date_to": max(start, end)}
 
 
+def _today() -> date:
+    return datetime.now(RESTAURANT_TZ).date()
+
+
+def _check_dates(*values: str | None) -> None:
+    """Refuse impossible dates with a hint, instead of silently reporting an empty period.
+
+    Models often get the year wrong ("2024-11-14" for yesterday); an empty report then reads
+    as "no sales yesterday". A refusal that names today's date lets the model correct itself.
+    """
+    today = _today()
+    for value in values:
+        if value is None:
+            continue
+        try:
+            day = date.fromisoformat(value)
+        except ValueError:
+            raise ToolError(f"'{value}' is not a date. Use YYYY-MM-DD; today is {today}.") from None
+        if day > today:
+            raise ToolError(f"{value} is in the future; today is {today}. There is no data yet.")
+        if day < today - timedelta(days=366):
+            try:
+                guess = day.replace(year=today.year)
+            except ValueError:  # 29 February
+                guess = day.replace(year=today.year, day=28)
+            if guess > today:
+                guess = guess.replace(year=today.year - 1)
+            raise ToolError(
+                f"{value} is more than a year ago; today is {today}. Did you mean {guess}?"
+            )
+
+
+def _norm(name: str) -> str:
+    """Case- and Turkish-insensitive name for comparisons ('teras 1' == 'Teras 1')."""
+    name = name.replace("İ", "i").replace("I", "ı").lower()
+    return " ".join(name.split())
+
+
+def _same_name(said: str, actual: str) -> bool:
+    said, actual = _norm(said), _norm(actual)
+    return said == actual or actual in said  # "Teras 1 masası" names "Teras 1"
+
+
+async def _checked_table(table_id: int, table_name: str) -> None:
+    tables = await api.get("/tables")
+    by_id = next((t for t in tables if t["id"] == table_id), None)
+    if by_id and _same_name(table_name, by_id["name"]):
+        return
+    named = next((t for t in tables if _same_name(table_name, t["name"])), None)
+    actual = f"table_id {table_id} is '{by_id['name']}'" if by_id else f"No table_id {table_id}"
+    if named:
+        raise ToolError(
+            f"{actual}, not '{table_name}'. '{named['name']}' is table_id {named['id']}."
+        )
+    names = ", ".join(t["name"] for t in tables)
+    raise ToolError(f"{actual}, and no table is named '{table_name}'. Tables: {names}.")
+
+
+async def _checked_ingredient(ingredient_id: int, ingredient_name: str) -> dict[str, Any]:
+    items = await api.get("/inventory/ingredients")
+    by_id = next((i for i in items if i["id"] == ingredient_id), None)
+    if by_id and _same_name(ingredient_name, by_id["name"]):
+        return by_id
+    said = _norm(ingredient_name)
+    named = [i for i in items if said in _norm(i["name"]) or _norm(i["name"]) in said]
+    actual = (
+        f"ingredient_id {ingredient_id} is '{by_id['name']}'"
+        if by_id
+        else f"No ingredient_id {ingredient_id}"
+    )
+    if named:
+        found = ", ".join(f"'{i['name']}' = ingredient_id {i['id']}" for i in named)
+        raise ToolError(f"{actual}, not '{ingredient_name}'. {found}.")
+    raise ToolError(f"{actual}, and no ingredient matches '{ingredient_name}'. Use get_inventory.")
+
+
+def _rename_id(rows: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
+    """Return ids under the parameter name they feed (table_id, ingredient_id), first."""
+    return [{key: row["id"], **{k: v for k, v in row.items() if k != "id"}} for row in rows]
+
+
 # --------------------------------------------------------------------------- #
 # Read tools
 # --------------------------------------------------------------------------- #
@@ -153,8 +254,8 @@ async def get_menu_item(menu_item_id: int) -> dict[str, Any]:
 async def list_tables(
     status: Literal["free", "occupied", "reserved"] | None = None,
 ) -> list[dict[str, Any]]:
-    """Tables with area, capacity, status and the open order id (if occupied)."""
-    return await api.get("/tables", status=status)
+    """Tables (table_id, name, area, capacity, status) and the open_order_id if occupied."""
+    return _rename_id(await api.get("/tables", status=status), "table_id")
 
 
 @mcp.tool(annotations=READ)
@@ -167,6 +268,7 @@ async def list_orders(
     limit: Annotated[int, Field(ge=1, le=200)] = 20,
 ) -> list[dict[str, Any]]:
     """Order headers (no line items), newest first. Defaults to today's orders."""
+    _check_dates(date_from, date_to)
     return await api.get(
         "/orders",
         status=status,
@@ -187,6 +289,7 @@ async def get_order(order_id: OrderId) -> dict[str, Any]:
 @mcp.tool(annotations=READ)
 async def get_daily_summary(day: Date = None) -> dict[str, Any]:
     """End-of-day (Z) report for one day: sales, discounts, channels, payment methods, voids."""
+    _check_dates(day)
     return await api.get("/reports/daily-summary", day=day)
 
 
@@ -200,6 +303,7 @@ async def get_sales_report(
 
     Use it for trends and comparisons (e.g. this week vs last week = two calls).
     """
+    _check_dates(date_from, date_to)
     return await api.get("/reports/sales", date_from=date_from, date_to=date_to, group_by=group_by)
 
 
@@ -212,6 +316,7 @@ async def get_top_items(
     limit: Annotated[int, Field(ge=1, le=50)] = 10,
 ) -> dict[str, Any]:
     """Best-selling menu items in a date range, by quantity or revenue."""
+    _check_dates(date_from, date_to)
     items = await api.get(
         "/reports/top-items",
         date_from=date_from,
@@ -226,6 +331,7 @@ async def get_top_items(
 @mcp.tool(annotations=READ)
 async def get_staff_performance(date_from: Date = None, date_to: Date = None) -> dict[str, Any]:
     """Orders, revenue and average ticket per staff member, highest revenue first."""
+    _check_dates(date_from, date_to)
     staff = await api.get("/reports/staff", date_from=date_from, date_to=date_to)
     return {"period": _period(date_from, date_to), "staff": staff}
 
@@ -233,6 +339,7 @@ async def get_staff_performance(date_from: Date = None, date_to: Date = None) ->
 @mcp.tool(annotations=READ)
 async def get_void_report(date_from: Date = None, date_to: Date = None) -> dict[str, Any]:
     """Voided/cancelled items by item and reason, with lost value. Useful for loss analysis."""
+    _check_dates(date_from, date_to)
     voids = await api.get("/reports/voids", date_from=date_from, date_to=date_to)
     return {"period": _period(date_from, date_to), "voids": voids}
 
@@ -242,18 +349,22 @@ async def get_inventory(
     low_stock_only: Annotated[bool, Field(description="Only items below reorder level.")] = False,
     search: Annotated[str | None, Field(description="Ingredient name filter.")] = None,
 ) -> list[dict[str, Any]]:
-    """Ingredient stock: quantity, reorder level, 7-day average usage and days of cover."""
-    return await api.get("/inventory/ingredients", below_reorder=low_stock_only, search=search)
+    """Ingredient stock (ingredient_id, name, quantity, reorder level, 7-day average usage,
+    days of cover)."""
+    rows = await api.get("/inventory/ingredients", below_reorder=low_stock_only, search=search)
+    return _rename_id(rows, "ingredient_id")
 
 
 @mcp.tool(annotations=READ)
 async def get_stock_movements(
     ingredient_id: IngredientId,
+    ingredient_name: IngredientName,
     days: Annotated[int, Field(ge=1, le=90)] = 14,
     reason: Literal["sale", "purchase", "waste", "adjustment", "returned"] | None = None,
 ) -> list[dict[str, Any]]:
     """Stock ledger of one ingredient (sales, purchases, waste, returns). Explains WHY stock
     changed."""
+    await _checked_ingredient(ingredient_id, ingredient_name)
     return await api.get(
         f"/inventory/ingredients/{ingredient_id}/movements", days=days, reason=reason
     )
@@ -267,9 +378,12 @@ async def get_stock_movements(
 @mcp.tool(annotations=WRITE)
 async def create_order(
     items: list[OrderLine],
-    channel: Literal["dine_in", "takeaway", "delivery"] = "dine_in",
+    channel: Annotated[
+        Literal["dine_in", "takeaway", "delivery"],
+        Field(description="'paket' / 'paket servis' = takeaway (no table); 'kurye' = delivery."),
+    ] = "dine_in",
     table_id: Annotated[
-        int | None, Field(description="Required for dine_in. Table id from list_tables.")
+        int | None, Field(description="Required for dine_in only. table_id from list_tables.")
     ] = None,
 ) -> dict[str, Any]:
     """Open a new order. Dine-in needs a table without an open order.
@@ -289,9 +403,10 @@ async def add_items_to_order(order_id: OrderId, items: list[OrderLine]) -> dict[
 
 @mcp.tool(annotations=WRITE)
 async def set_table_status(
-    table_id: TableId, status: Literal["free", "reserved"]
+    table_id: TableId, table_name: TableName, status: Literal["free", "reserved"]
 ) -> dict[str, Any]:
     """Mark a table without an open order as free or reserved."""
+    await _checked_table(table_id, table_name)
     return await api.patch(f"/tables/{table_id}", {"status": status})
 
 
@@ -424,11 +539,17 @@ async def pay_order(
 
 
 async def approve_purchase(
-    ctx: Context, ingredient_id: int, quantity: float, note: str, confirmation_token: str | None
+    ctx: Context,
+    ingredient_id: int,
+    ingredient_name: str,
+    quantity: float,
+    note: str,
+    confirmation_token: str | None,
 ) -> Elicit[Approval] | Gate:
-    matches = [i for i in await api.get("/inventory/ingredients") if i["id"] == ingredient_id]
-    name, unit = (matches[0]["name"], matches[0]["unit"]) if matches else (f"#{ingredient_id}", "")
-    preview = f"Add {quantity:g} {unit} of {name} to stock. Note: {note}"
+    ingredient = await _checked_ingredient(ingredient_id, ingredient_name)
+    preview = (
+        f"Add {quantity:g} {ingredient['unit']} of {ingredient['name']} to stock. Note: {note}"
+    )
     args = {"ingredient_id": ingredient_id, "quantity": quantity, "note": note}
     return gate(ctx, "record_stock_purchase", args, preview, confirmation_token)
 
@@ -436,6 +557,7 @@ async def approve_purchase(
 @mcp.tool(annotations=WRITE)
 async def record_stock_purchase(
     ingredient_id: IngredientId,
+    ingredient_name: IngredientName,
     quantity: Annotated[float, Field(gt=0, description="In the ingredient's own unit.")],
     approval: Annotated[ElicitationResult[Approval], Resolve(approve_purchase)],
     note: str = "Manuel alım",

@@ -1,44 +1,50 @@
 ## lmstudio/mistralai/magistral-small-2509@v2
 
-Run: 2026-11-15 17:52 · 30 cases × 3 runs (counts below are over all runs)
+Run: 2026-11-15 21:59 · 30 cases × 3 runs (counts below are over all runs)
 
 | Category | Cases | Passed | Right tool |
 |---|---:|---:|---:|
-| report | 7 | 17/21 (81%) | 100% |
-| inventory | 3 | 8/9 (89%) | 100% |
-| menu | 6 | 18/18 (100%) | 100% |
-| write | 5 | 11/15 (73%) | 87% |
-| ask | 3 | 6/9 (67%) | 100% |
-| approval | 6 | 18/18 (100%) | 100% |
-| **total** | **30** | **78/90 (87%)** | **98%** |
+| report | 7 | 16/21 (76%) | 100% |
+| inventory | 3 | 7/9 (78%) | 100% |
+| menu | 6 | 16/18 (89%) | 100% |
+| write | 5 | 10/15 (67%) | 87% |
+| ask | 3 | 9/9 (100%) | 100% |
+| approval | 6 | 17/18 (94%) | 94% |
+| **total** | **30** | **75/90 (83%)** | **97%** |
 
-Passed per run: 28, 25, 25 of 30 (mean 26.0, min 25, max 28)
+Passed per run: 26, 26, 23 of 30 (mean 25.0, min 23, max 26)
 
-Avg tool calls per case: 2.7 · Avg time: 2.7s · Tokens: 1,308,338 in / 12,053 out
+Avg tool calls per case: 2.6 · Avg time: 2.6s · Tokens: 1,295,957 in / 11,946 out
 
 ### Failures
 
-- `report-top5-yesterday` (Dün en çok satan 5 ürün hangileriydi?) — failed 1/3 — get_top_items: args.limit is missing  
-  calls: get_current_time > get_sales_report > get_top_items  
-  answer: Dün (14 Kasım 2026) en çok satan 5 ürün: 1. Çay - 251 adet 2. Lahmacun - 115 adet 3. Ayran - 97 adet 4. Mercimek Çorbası - 82 adet 5. Kola - 57 adet
-- `report-channels-7d` (Son 7 günde paket servis, masa ve kurye satışlarını karşılaştır.) — failed 1/3 — get_sales_report: args.date_from=<missing> matches none of [{'date': -6}, {'date': -7}]  
-  calls: get_current_time > get_sales_report > get_sales_report  
-  answer: Son 7 günde paket servis, masa ve kurye satışlarını karşılaştır: | Kanal | Sipariş Sayısı | Toplam Gelir (TRY) | Ortalama Fiş (TRY) | |-------------|----------------|--------------------|---------------------| | Paket Se…
-- `report-voids-yesterday` (Dün hangi ürünler iptal edildi, sebepleri neydi?) — failed 2/3 — get_void_report: args.date_from should be '2026-11-14', got '2023-11-14'  
-  calls: get_current_time > get_void_report  
-  answer: Dün iptal edilen ürün yoktu.
-- `inventory-why-mince-low` (Dana kıyma neden bu kadar azaldı? Son 14 günün stok hareketlerine bak.) — failed 1/3 — get_stock_movements: args.ingredient_id should be 1, got 23  
+- `report-top5-yesterday` (Dün en çok satan 5 ürün hangileriydi?) — failed 1/3 — get_top_items failed: Error executing tool get_top_items: POS API error 422: [{'type': 'date_from_datetime_parsing', 'loc': ['query', 'date_from'], 'msg': 'Input should be a valid da  
+  calls: get_current_time > get_top_items > get_top_items  
+  answer: Dün (14 Kasım 2026) en çok satan 5 ürün: 1. Lahmacun – 115 adet 2. Beyti – 53 adet 3. Adana Kebap – 46 adet 4. Künefe – 51 adet 5. Mercimek Çorbası – 82 adet
+- `report-top3-revenue-yesterday` (Dün ciro bazında en çok kazandıran 3 ürün hangisi?) — failed 1/3 — get_top_items: args.limit is missing  
+  calls: get_current_time > search_menu > get_sales_report > get_top_items  
+  answer: Dün (2026-11-14) ciro bazında en çok kazandıran 3 ürün şunlar: 1. Beyti - Kebaplar: 35.420 TL 2. Adana Kebap - Kebaplar: 26.760 TL 3. Lahmacun - Pide & Lahmacun: 18.400 TL
+- `report-channels-7d` (Son 7 günde paket servis, masa ve kurye satışlarını karşılaştır.) — failed 1/3 — get_sales_report: args.date_from=None matches none of [{'date': -6}, {'date': -7}]  
+  calls: get_sales_report > get_sales_report  
+  answer: Son 7 günde, paket servis (delivery) için sipariş sayısı 33 ve gelir 49.915 TL, masa (dine_in) için sipariş sayısı 65 ve gelir 164.386 TL, kurye (takeaway) için sipariş sayısı 23 ve gelir 26.115 TL olmuştur. Toplamda, ma…
+- `report-voids-yesterday` (Dün hangi ürünler iptal edildi, sebepleri neydi?) — failed 2/3 — get_void_report: args.date_from should be '2026-11-14', got '2024-11-14'  
+  calls: get_current_time > get_void_report > get_current_time  
+  answer: 14 Kasım 2024'te (dün) iptal edilen ürünler yok.
+- `inventory-why-mince-low` (Dana kıyma neden bu kadar azaldı? Son 14 günün stok hareketlerine bak.) — failed 2/3 — get_stock_movements: args.ingredient_id should be 1, got 10  
   calls: get_current_time > get_stock_movements  
-  answer: Dana kıyma stoklarının azalmasının ana nedeni son 14 gün içinde gerçekleşen satışlar. Aşağıda detaylı bilgi: Tedarikçi teslimatları: - 15 Kasım: +69 kg - 10 Kasım: +74 kg - 7 Kasım: +72 kg - 4 Kasım: +79 kg Satış tüketim…
-- `write-add-items` (Bahçe 2'ye 2 çay ekle.) — failed 2/3 — never called add_items_to_order  
-  calls: get_current_time > search_menu > list_tables > create_order  
-  answer: Table Bahçe 2 already has an open order (order #3129). To add two teas, I'll need the table's id. What is it?
-- `write-free-reserved-table` (Teras 1'deki rezervasyon iptal oldu, masayı boşa çıkar.) — failed 2/3 — set_table_status: args.table_id should be 14, got 1  
+  answer: Son 14 gün içinde dana kıymanın azalmasında, 17 satış tüketime (toplam -83.1 kg) karşı 4 tedarikçi teslimatı (toplam +85.37 kg) kaydedildi. Stokta azalma, son iki hafta boyunca aralıksız satışlar ve yeterli miktarda yeni…
+- `floor-order-contents` (Bahçe 2'de neler sipariş edilmiş?) — failed 1/3 — get_order: args.order_id should be 3192, got 14  
+  calls: list_tables > get_order  
+  answer: Bahçe 2 masasında şu sipariş verilmiş: - Adana Kebap (acılı) - 560 TL - Ayran - 2 adet, 100 TL - Yayla Çorbası - 160 TL - Künefe - 2 adet, 560 TL - Tavuk Şiş - 420 TL - Tavuk Kanat (acılı) - 400 TL - Şalgam - 60 TL Topla…
+- `floor-bill-total` (Teras 2'nin hesabı ne kadar tuttu?) — failed 1/3 — get_order: args.order_id should be 3194, got 15  
+  calls: list_tables > get_order  
+  answer: Teras 2'nin hesabı 3.060 TL idi.
+- `write-takeaway` (Paket servis: 3 acısız lahmacun ve 1 şalgam.) — failed 2/3 — never called create_order  
+  calls: get_current_time > search_menu > search_menu > get_menu_item  
+  answer: Lahmacun için acısız seçeneği var. Şalgam için de siz istediğiniz gibi. Paket servis için masayı mi belirtmeyi unuttunuz?
+- `write-reserve-table` (Salon 1'i akşam için rezerve et.) — failed 3/3 — set_table_status failed: Error executing tool set_table_status: POS API error 404: Table #0 not found.  
   calls: set_table_status  
-  answer: Masa Teras 1 artık boş olarak işaretlendi.
-- `ask-spice-beyti` (Salon 6'ya bir Beyti aç.) — failed 1/3 — asked, but not about /(?i)ac[ıi]/  
-  calls: get_current_time > list_tables > search_menu > create_order  
-  answer: Beyti menüde bulunamadı. Lütfen doğru yazılışını kontrol edin veya diğer bir kebap önerisi varsa onu verin.
-- `ask-which-table` (2 kola ekle.) — failed 2/3 — forbidden call: add_items_to_order; did not ask the user for the missing information  
-  calls: get_current_time > search_menu > list_tables > add_items_to_order  
-  answer: Salon 5 masasına iki kola eklendi. Toplam tutar artık 860 TRY'dir.
+  answer: Hata: Salon 1 tablosu bulunamadı. Lütfen tablo adını veya numarasını kontrol edip tekrar deneyin.
+- `approve-void-line` (Bahçe 2'deki ayranları sil, yanlışlıkla girilmiş.) — failed 1/3 — never called void_order_item  
+  calls: list_tables > get_order  
+  answer: Sipariş 17, Salon 8 masasındaki ayranları silmek istediğinize emin misiniz? (2 adet, toplam 100 TRY) Silme sebebini girin ve yemekler hazırlanmadıysa stoklara iade edilecek mi?

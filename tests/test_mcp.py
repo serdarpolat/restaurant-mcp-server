@@ -45,7 +45,9 @@ async def open_adana_order(client) -> dict:
         "quantity": 2,
         "modifier_ids": [spice["modifiers"][0]["id"]],
     }
-    return data(await client.call_tool("create_order", {"table_id": table["id"], "items": [line]}))
+    return data(
+        await client.call_tool("create_order", {"table_id": table["table_id"], "items": [line]})
+    )
 
 
 async def test_tools_are_listed_with_safety_annotations(pos_api):
@@ -173,3 +175,50 @@ async def test_instructions_and_parameter_hints_reach_the_model(pos_api):
         "list_tables"
         in tools["set_table_status"].input_schema["properties"]["table_id"]["description"]
     )
+
+
+async def test_impossible_dates_are_refused_with_a_hint(pos_api):
+    async with Client(mcp) as client:
+        today = data(await client.call_tool("get_current_time", {}))["date"]
+        year = int(today[:4])
+        old = await client.call_tool("get_void_report", {"date_from": f"{year - 2}{today[4:]}"})
+        future = await client.call_tool("get_top_items", {"date_from": f"{year + 1}-01-01"})
+        bad = await client.call_tool("get_daily_summary", {"day": "dün"})
+    assert old.is_error and f"Did you mean {today}" in old.content[0].text
+    assert future.is_error and today in future.content[0].text
+    assert bad.is_error and "YYYY-MM-DD" in bad.content[0].text
+
+
+async def test_ids_are_checked_against_the_name_the_user_said(pos_api):
+    async with Client(mcp) as client:
+        tables = data(await client.call_tool("list_tables", {}))
+        teras = next(t for t in tables if t["name"] == "Teras 1")
+        other = next(t for t in tables if t["name"] != "Teras 1")
+        wrong = await client.call_tool(
+            "set_table_status",
+            {"table_id": other["table_id"], "table_name": "Teras 1", "status": "reserved"},
+        )
+        right = await client.call_tool(
+            "set_table_status",
+            {"table_id": teras["table_id"], "table_name": "teras 1", "status": "reserved"},
+        )
+        kiyma = data(await client.call_tool("get_inventory", {"search": "kıyma"}))[0]
+        guessed = await client.call_tool(
+            "get_stock_movements",
+            {"ingredient_id": kiyma["ingredient_id"] + 1, "ingredient_name": "Dana Kıyma"},
+        )
+        purchase = await client.call_tool(
+            "record_stock_purchase",
+            {
+                "ingredient_id": kiyma["ingredient_id"] + 1,
+                "ingredient_name": "Dana Kıyma",
+                "quantity": 10,
+            },
+        )
+    assert wrong.is_error
+    assert f"'Teras 1' is table_id {teras['table_id']}" in wrong.content[0].text
+    assert data(right)["status"] == "reserved"
+    assert "id" not in kiyma
+    for result in (guessed, purchase):  # nothing previewed or changed for the wrong item
+        assert result.is_error
+        assert f"= ingredient_id {kiyma['ingredient_id']}" in result.content[0].text
