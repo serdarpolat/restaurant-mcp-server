@@ -199,17 +199,18 @@ must fail for the right reasons (`tests/test_evals.py`).
 <!-- eval-results -->
 ### Results: what better tool design buys
 
-Model: Mistral Magistral Small 2509 (24B, Q4_K_M) running locally in LM Studio. Each version
-ran the full set 3 times, since a model's answers vary from run to run.
+Model: Mistral Magistral Small 2509 (24B, Q4_K_M) running locally in LM Studio. A model's
+answers vary from run to run, so each version ran the full set several times (v1 3 times,
+v2 6 times), all scored with the same rules.
 
 | | Before (v1) | After (v2) |
 |---|---:|---:|
-| Passed, 3 runs | 66/90 (73%) | **78/90 (87%)** |
-| Passed per run | 23 · 19 · 24 | 28 · 25 · 25 |
-| Right tool chosen | 83% | 98% |
-| Approval-gated actions | 9/18 | **18/18** |
-| Orders and table changes | 8/15 | 11/15 |
-| Input tokens per case | 13.2k | 14.5k |
+| Passed | 59/90 (66%) | **155/180 (86%)** |
+| Passed per run (of 30) | 19 · 20 · 20 | 26 · 27 · 27 · 26 · 26 · 23 |
+| Right tool chosen | 82% | 97% |
+| Approval-gated actions | 7/18 (39%) | **35/36 (97%)** |
+| Orders and table changes | 7/15 (47%) | 21/30 (70%) |
+| Input tokens per case | 13.5k | 14.4k |
 
 The model did not change; only the MCP server did. The worst v2 run beats the best v1 run.
 What changed, each driven by a failure the eval caught:
@@ -226,9 +227,10 @@ What changed, each driven by a failure the eval caught:
 - **Answers that state their scope.** Called without dates, a report silently covered today;
   the model presented it as yesterday. Reports now echo the period they cover.
 
-Still failing in v2: writing the wrong year (2023), guessing a table id without looking it
-up, and adding drinks to some table when the user did not say which one.
-Full logs: [`evals/results/`](evals/results/).
+Still failing in v2: writing the wrong year (2024 instead of 2026), guessing a table or order
+id instead of looking it up ("Salon 1" became table id 0 in every run), and now and then
+asking a question instead of placing a takeaway order.
+Full logs of the latest 3-run batch per version: [`evals/results/`](evals/results/).
 
 ## Roadmap
 
