@@ -3,6 +3,7 @@
 [![CI](https://github.com/serdarpolat/restaurant-mcp-server/actions/workflows/ci.yml/badge.svg)](https://github.com/serdarpolat/restaurant-mcp-server/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-Serdar%20Polat-0A66C2)](https://www.linkedin.com/in/serdar-polat-40287911b/)
 
 > Connect AI assistants (Claude, etc.) to a realistic restaurant POS system through the
 > [Model Context Protocol](https://modelcontextprotocol.io).
@@ -13,6 +14,13 @@ Ask your AI assistant things like:
 - "Which ingredients are running low, and why is the minced meat almost gone?"
 - "Add 2 Adana kebabs and 2 ayran to a free table." (it asks for the spice level)
 - "Cancel that order." (it asks *you* to approve first)
+
+> [!WARNING]
+> **Work in progress: demo data only.** This project runs on generated data for a fictional
+> restaurant. It is not connected to any real POS system, the API has no authentication, and
+> it is not ready for real restaurants or real money. Run it on your own computer and do not
+> expose the API or the HTTP MCP endpoint to a network. Connecting a real POS (behind
+> authentication, read-only first) is planned but not built yet.
 
 ## Try it in 2 minutes
 
@@ -133,6 +141,9 @@ docker compose up
 
 - POS API with interactive docs: http://localhost:8000/docs
 - MCP server over Streamable HTTP: http://localhost:8001/mcp
+
+Both ports listen on your own computer only (`127.0.0.1`), since the demo has no
+authentication.
 
 ### Option 4: From source
 
@@ -345,8 +356,16 @@ Full logs of the latest 3-run batch per version: [`evals/results/`](evals/result
 - [x] Tests, CI (Linux + Windows), Docker, uv
 - [x] Eval harness: 30 Turkish requests, argument-level scoring
 - [x] Eval results: tool-design changes measured before/after
+- [ ] Eval the preview + token approval path (clients without approval prompts)
 - [ ] More models in the comparison
+- [ ] Authentication, then a read-only connection to a real POS
 - [ ] Demo video
+
+## Follow the progress
+
+This project is under active development, and I share each step on LinkedIn, including
+what breaks and how it gets fixed. To follow along and hear when it's ready, follow me:
+[Serdar Polat on LinkedIn](https://www.linkedin.com/in/serdar-polat-40287911b/).
 
 ## License
 
