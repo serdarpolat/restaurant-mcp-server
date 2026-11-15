@@ -5,7 +5,7 @@ from sqlmodel import select
 
 from pos_api.db.models import Category, MenuItem
 from pos_api.deps import SessionDep
-from pos_api.errors import NotFound
+from pos_api.errors import Invalid, NotFound
 from pos_api.schemas import CategoryRead, MenuItemDetail, MenuItemRead
 from pos_api.text import matches
 
@@ -24,6 +24,13 @@ def _item_read(item: MenuItem) -> MenuItemRead:
     )
 
 
+def check_category(session, category: str) -> None:
+    """Unknown categories get the valid list back, so an agent can retry ("soup" -> Çorbalar)."""
+    names = session.exec(select(Category.name).order_by(Category.sort_order)).all()
+    if not any(matches(category, n) for n in names):
+        raise Invalid(f"Unknown category '{category}'. Categories: {', '.join(names)}.")
+
+
 @router.get("/categories", response_model=list[CategoryRead])
 def list_categories(session: SessionDep):
     cats = session.exec(select(Category).order_by(Category.sort_order)).all()
@@ -37,6 +44,8 @@ def list_items(
     category: Annotated[str | None, Query(description="Category name")] = None,
     active_only: bool = True,
 ):
+    if category:
+        check_category(session, category)
     items = session.exec(select(MenuItem).order_by(MenuItem.category_id, MenuItem.id)).all()
     out = []
     for item in items:

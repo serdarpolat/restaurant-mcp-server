@@ -207,7 +207,7 @@ async def test_wrong_agent_fails_for_the_right_reasons(resolver, tmp_path):
     assert results["report-top5-yesterday"].tool_ok  # right tool, wrong arguments
 
     md = summary_markdown("scripted", list(results.values()))
-    assert "| **total** | **4** | **0 (0%)** |" in md
+    assert "| **total** | **4** | **0/4 (0%)** |" in md
 
 
 def test_matchers(resolver):
@@ -242,3 +242,104 @@ def test_select_cases():
     assert all(c["category"] == "ask" for c in select_cases(SPEC["cases"], None, "ask"))
     with pytest.raises(SystemExit):
         select_cases(SPEC["cases"], "nope", None)
+
+
+class BrokeAgent:
+    name = "broke"
+
+    async def run(self, prompt: str, session: ToolSession) -> Trajectory:
+        return Trajectory(error="BadRequestError: Your credit balance is too low to access the API")
+
+
+async def test_account_errors_stop_the_run(tmp_path):
+    with pytest.raises(SystemExit, match="no credits"):
+        await run_cases(BrokeAgent(), SPEC, SPEC["cases"][:3], tmp_path, days=7)
+
+
+async def test_openai_compatible_agent_against_a_fake_lm_studio(resolver, tmp_path):
+    """The OpenAI-format loop: tool call -> tool result -> final answer (think block hidden)."""
+    import json
+
+    import httpx
+
+    from evals.agent import OpenAICompatibleAgent
+
+    yesterday = resolver.resolve("date", -1)
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        seen.append(body)
+        if len(seen) == 1:
+            assert body["tools"][0]["type"] == "function"
+            call = {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "get_top_items",
+                    "arguments": json.dumps(
+                        {"date_from": yesterday, "date_to": yesterday, "limit": 5}
+                    ),
+                },
+            }
+            message = {"role": "assistant", "content": None, "tool_calls": [call]}
+        else:
+            assert body["messages"][-1]["role"] == "tool"
+            assert body["messages"][-1]["tool_call_id"] == "call_1"
+            message = {"role": "assistant", "content": "<think>hmm?</think>Dünün ilk 5'i hazır."}
+        usage = {"prompt_tokens": 100, "completion_tokens": 10}
+        return httpx.Response(200, json={"choices": [{"message": message}], "usage": usage})
+
+    agent = OpenAICompatibleAgent(
+        "fake-model", "http://lmstudio/v1", transport=httpx.MockTransport(handler)
+    )
+    [result] = await run_cases(agent, SPEC, [CASES["report-top5-yesterday"]], tmp_path, days=7)
+    assert result.passed, result.reasons
+    assert result.trajectory.final_text == "Dünün ilk 5'i hazır."
+    assert result.trajectory.input_tokens == 200
+
+
+async def test_unreachable_model_server_stops_the_run(tmp_path):
+    import httpx
+
+    from evals.agent import OpenAICompatibleAgent
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    agent = OpenAICompatibleAgent(
+        "m", "http://localhost:1/v1", transport=httpx.MockTransport(refuse)
+    )
+    with pytest.raises(SystemExit, match="Start Server"):
+        await run_cases(agent, SPEC, SPEC["cases"][:2], tmp_path, days=7)
+
+
+@pytest.mark.parametrize(
+    ("answer", "passes"),
+    [
+        ("Adana için acı seviyesi ne olsun?", True),
+        ("Lütfen Adana Kebap için acı seviyesini seçin: Acılı, Az Acılı, Acısız", True),
+        ("Acılı mı olsun, acısız mı", True),
+        ("Salon 4'e Adana siparişi açtım.", False),  # no question
+        ("Hangi masaya açayım?", False),  # a question, but not about the spice level
+    ],
+)
+def test_ask_detection(resolver, answer, passes):
+    result = score(CASES["ask-spice-adana"], Trajectory(final_text=answer), resolver)
+    assert result.passed is passes, result.reasons
+
+
+async def test_repeat_reports_per_run_totals_and_unstable_cases(resolver, tmp_path):
+    flips = iter([True, False])  # passes in run 1, fails in run 2
+
+    def plan(x):
+        good = next(flips)
+        return GOOD["report-top5-yesterday"](x) if good else BAD["report-top5-yesterday"](x)
+
+    agent = ScriptedAgent({"report-top5-yesterday": plan}, resolver)
+    case = [CASES["report-top5-yesterday"]]
+    results = await run_cases(agent, SPEC, case, tmp_path, days=7, repeat=2)
+    assert [(r.run, r.passed) for r in results] == [(1, True), (2, False)]
+    md = summary_markdown("scripted", results)
+    assert "Passed per run: 1, 0 of 1" in md
+    assert "failed 1/2" in md

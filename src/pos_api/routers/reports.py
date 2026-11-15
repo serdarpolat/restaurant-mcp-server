@@ -4,6 +4,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query
 
 from pos_api.deps import SessionDep
+from pos_api.routers.menu import check_category
 from pos_api.schemas import DailySummary, SalesReport, StaffPerformanceRow, TopItemRow, VoidRow
 from pos_api.services import reports as service
 from pos_api.services.reports import SalesGroupBy, TopItemsSort
@@ -34,6 +35,8 @@ def top_items(
     limit: Annotated[int, Query(ge=1, le=50)] = 10,
     category: str | None = None,
 ):
+    if category:
+        check_category(session, category)
     return service.top_items(session, *resolve_dates(date_from, date_to), sort, limit, category)
 
 

@@ -60,7 +60,7 @@ docker compose up
 git clone https://github.com/serdarpolat/restaurant-mcp-server
 cd restaurant-mcp-server
 uv sync --extra dev
-uv run pytest                 # 43 tests
+uv run pytest                 # 55 tests
 uv run restaurant-pos-api     # http://127.0.0.1:8000/docs
 uv run restaurant-pos-mcp     # MCP server over stdio
 ```
@@ -176,21 +176,59 @@ many as it needs (look up the menu, find the table, then order), and every call 
 | ask | 3 | missing spice level, missing table |
 | approval | 6 | cancel (with and without restock), void a line, pay, discount, stock purchase |
 
-Run it (needs an Anthropic API key):
+Run it against any model with tool calling: a local one in LM Studio or Ollama (free, no key),
+or a hosted one (Anthropic, Gemini, Groq, OpenRouter; keys in `.env`):
 
 ```bash
 uv sync --extra eval
-export ANTHROPIC_API_KEY=...          # Windows CMD: set ANTHROPIC_API_KEY=...
-uv run python -m evals.run --model claude-sonnet-5-5
-uv run python -m evals.run --model claude-haiku-5-5 --category ask
+# LM Studio: load a model with a 16k+ context, then Developer tab > Start Server
+uv run python -m evals.run --provider lmstudio --list-models
+uv run python -m evals.run --provider lmstudio --model mistralai/magistral-small-2509
+uv run python -m evals.run --provider anthropic --model claude-sonnet-5-5
+uv run python -m evals.run --provider gemini --model <model id> --category ask
 ```
+
+Any other OpenAI-compatible server works with `--provider openai --base-url <url>/v1`.
+The agent loop is written directly against each API (no agent framework), so what is measured
+is the model plus the MCP server's tool descriptions, nothing else.
 
 Results go to `evals/results/<model>.md` (summary and failures) and `.json` (every call).
 The harness itself is tested without a model: a scripted agent must pass, and a wrong one
 must fail for the right reasons (`tests/test_evals.py`).
 
 <!-- eval-results -->
-_Results table coming with the first run._
+### Results: what better tool design buys
+
+Model: Mistral Magistral Small 2509 (24B, Q4_K_M) running locally in LM Studio. Each version
+ran the full set 3 times, since a model's answers vary from run to run.
+
+| | Before (v1) | After (v2) |
+|---|---:|---:|
+| Passed, 3 runs | 66/90 (73%) | **78/90 (87%)** |
+| Passed per run | 23 · 19 · 24 | 28 · 25 · 25 |
+| Right tool chosen | 83% | 98% |
+| Approval-gated actions | 9/18 | **18/18** |
+| Orders and table changes | 8/15 | 11/15 |
+| Input tokens per case | 13.2k | 14.5k |
+
+The model did not change; only the MCP server did. The worst v2 run beats the best v1 run.
+What changed, each driven by a failure the eval caught:
+
+- **"Don't ask, call."** The model asked "are you sure?" in chat instead of calling the cancel
+  tool, which already asks the user itself. The instructions now say so.
+- **Where ids come from.** The model used a menu item id as an ingredient id and read
+  "Teras 1" as table id 1. Every id parameter now says which tool provides it.
+- **Use what the user said.** "3 acısız lahmacun" names the spice level; the model asked
+  anyway, and also asked about optional choices. Now: map stated options, ask only for
+  missing required ones.
+- **Errors that teach.** `category="soup"` returned an empty list ("we have no soups"). It now
+  returns the valid Turkish categories, and the model retries.
+- **Answers that state their scope.** Called without dates, a report silently covered today;
+  the model presented it as yesterday. Reports now echo the period they cover.
+
+Still failing in v2: writing the wrong year (2023), guessing a table id without looking it
+up, and adding drinks to some table when the user did not say which one.
+Full logs: [`evals/results/`](evals/results/).
 
 ## Roadmap
 
@@ -199,7 +237,8 @@ _Results table coming with the first run._
 - [x] MCP server (read tools, write tools with confirmation)
 - [x] Tests, CI (Linux + Windows), Docker, uv
 - [x] Eval harness: 30 Turkish requests, argument-level scoring
-- [ ] Eval results for several models
+- [x] Eval results: tool-design changes measured before/after
+- [ ] More models in the comparison
 - [ ] Demo video
 
 ## License

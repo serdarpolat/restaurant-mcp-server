@@ -31,3 +31,10 @@ def test_occupied_tables_point_to_open_orders(client):
         order = client.get(f"/orders/{t['open_order_id']}").json()
         assert order["status"] == "open"
         assert order["table"] == t["name"]
+
+
+def test_unknown_category_lists_the_valid_ones(client):
+    r = client.get("/menu/items", params={"category": "soup"})
+    assert r.status_code == 422
+    assert "Çorbalar" in r.json()["detail"]  # an agent can retry with the right name
+    assert client.get("/menu/items", params={"category": "corbalar"}).status_code == 200

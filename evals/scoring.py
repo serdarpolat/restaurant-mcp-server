@@ -20,6 +20,10 @@ WRITE_TOOLS = frozenset(
 
 MISSING = object()
 
+# "Did the agent ask?" A question mark, or Turkish request phrasing that often ends without
+# one: "Lütfen acı seviyesini seçin", "Hangi masa", "belirtir misiniz".
+ASKS = re.compile(r"\?|(?i:lütfen|hangi|seç|belirt|söyle|ister mi|\bm[ıiuü](s[ıiuü]n[ıiuü]z)?\b)")
+
 
 @dataclass
 class ToolCall:
@@ -49,6 +53,7 @@ class CaseResult:
     tool_ok: bool  # every expected tool was called at least once, arguments aside
     reasons: list[str]
     trajectory: Trajectory
+    run: int = 1  # repetition number when a case is run several times
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -191,8 +196,12 @@ def score(case: dict[str, Any], traj: Trajectory, resolver: Resolver) -> CaseRes
         if unexpected and not call.is_error and f"forbidden call: {call.tool}" not in reasons:
             reasons.append(f"unexpected write: {call.tool}")
 
-    if case.get("ask") and "?" not in traj.final_text:
-        reasons.append("did not ask the user for the missing information")
+    if case.get("ask"):
+        text = traj.final_text
+        if not ASKS.search(text):
+            reasons.append("did not ask the user for the missing information")
+        elif case.get("ask_about") and not re.search(case["ask_about"], text):
+            reasons.append(f"asked, but not about /{case['ask_about']}/")
 
     reasons = list(dict.fromkeys(reasons))  # dedupe, keep order
     return CaseResult(

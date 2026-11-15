@@ -151,3 +151,25 @@ async def test_menu_resource_and_prompts(pos_api):
         prompts = {p.name for p in (await client.list_prompts()).prompts}
     assert "Adana Kebap" in menu.contents[0].text
     assert prompts == {"daily_briefing", "stock_investigation"}
+
+
+async def test_reports_echo_the_period_they_cover(pos_api):
+    async with Client(mcp) as client:
+        today = data(await client.call_tool("get_current_time", {}))["date"]
+        top = data(await client.call_tool("get_top_items", {"limit": 3}))
+        day = data(await client.call_tool("get_void_report", {"date_from": today}))
+    # no dates = today only, and the answer says so
+    assert top["period"] == {"date_from": today, "date_to": today}
+    assert len(top["items"]) <= 3
+    assert day["period"] == {"date_from": today, "date_to": today}
+
+
+async def test_instructions_and_parameter_hints_reach_the_model(pos_api):
+    async with Client(mcp) as client:
+        tools = {t.name: t for t in (await client.list_tools()).tools}
+    props = tools["get_stock_movements"].input_schema["properties"]
+    assert "get_inventory" in props["ingredient_id"]["description"]
+    assert (
+        "list_tables"
+        in tools["set_table_status"].input_schema["properties"]["table_id"]["description"]
+    )

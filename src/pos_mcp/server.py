@@ -28,14 +28,24 @@ INSTRUCTIONS = """\
 You are connected to the POS of a Turkish kebab restaurant.
 
 - Currency is Turkish Lira (TRY). All dates and times are restaurant local time.
-- Call get_current_time before resolving relative dates such as "yesterday" or "last week".
-- Never guess ids. Look up menu items with search_menu, tables with list_tables, and
-  options (modifiers) with get_menu_item.
-- Some menu items have REQUIRED options (e.g. spice level). If the user did not state one,
-  ask them; do not pick for them.
-- Tools that cancel, void, take payment or change stock need the user's approval. If a tool
-  answers "confirmation_required", show the preview to the user and wait for their answer.
+- Call get_current_time before resolving relative dates such as "yesterday" or "last week",
+  and always pass the dates: report tools default to TODAY when no date is given.
+- Never guess ids; take them from a lookup. Menu items and option ids: search_menu and
+  get_menu_item. Tables and their open order: list_tables (open_order_id). Ingredients:
+  get_inventory(search=...). The number in a table name ("Teras 1") is not its id, and a menu
+  item id is never an ingredient id.
+- Options: if the user already named an option in their own words ("acılı Adana",
+  "3 acısız lahmacun", "büyük ayran"), use that option's id. Ask only for REQUIRED option
+  groups (min_select >= 1) the user did not mention; never ask about optional groups
+  (min_select 0). Do not pick a required option for the user.
+- Menu category names are Turkish (e.g. "Çorbalar", "Kebaplar").
+- Tools that cancel, void, take payment or change stock ask the user for approval
+  themselves. Call them directly with the right arguments; do not ask "are you sure?" in
+  chat first. If a tool answers "confirmation_required", show the preview and wait.
+- After a write, check that the result names what the user asked for (table, item,
+  ingredient) before reporting success.
 - Report numbers exactly as returned by the tools; do not estimate.
+- Answer in the user's language.
 """
 
 mcp = MCPServer("restaurant-pos", instructions=INSTRUCTIONS)
@@ -44,7 +54,23 @@ READ = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world_hint=False)
 DESTRUCTIVE = ToolAnnotations(read_only_hint=False, destructive_hint=True, open_world_hint=False)
 
-Date = Annotated[str | None, Field(description="Local date, YYYY-MM-DD. Default: today.")]
+Date = Annotated[
+    str | None,
+    Field(description="Local date, YYYY-MM-DD. Omit both dates = today only; one date = that day."),
+]
+OrderId = Annotated[
+    int, Field(description="Order id. For a table's open order use list_tables.open_order_id.")
+]
+TableId = Annotated[
+    int, Field(description="Table id from list_tables (not the number in its name).")
+]
+IngredientId = Annotated[
+    int, Field(description="Ingredient id from get_inventory (never a menu item id).")
+]
+Category = Annotated[
+    str | None,
+    Field(description="Turkish category name, e.g. 'Çorbalar'. Unknown names return the list."),
+]
 ReturnToStock = Annotated[
     bool,
     Field(
@@ -79,6 +105,14 @@ def _where(order: dict[str, Any]) -> str:
     return order["table"] or order["channel"]
 
 
+def _period(date_from: str | None, date_to: str | None) -> dict[str, str]:
+    """The date range the API used (same defaults), echoed so the model can't misreport it."""
+    today = datetime.now(RESTAURANT_TZ).date().isoformat()
+    start = date_from or date_to or today
+    end = date_to or date_from or today
+    return {"date_from": min(start, end), "date_to": max(start, end)}
+
+
 # --------------------------------------------------------------------------- #
 # Read tools
 # --------------------------------------------------------------------------- #
@@ -100,7 +134,7 @@ async def search_menu(
     query: Annotated[
         str | None, Field(description="Name or keyword, Turkish letters optional ('cay' = 'çay').")
     ] = None,
-    category: Annotated[str | None, Field(description="Category name, e.g. 'Kebaplar'.")] = None,
+    category: Category = None,
 ) -> list[dict[str, Any]]:
     """Find menu items (id, name, price, category). Call with no arguments for the whole menu.
 
@@ -145,7 +179,7 @@ async def list_orders(
 
 
 @mcp.tool(annotations=READ)
-async def get_order(order_id: int) -> dict[str, Any]:
+async def get_order(order_id: OrderId) -> dict[str, Any]:
     """One order with its line items (ids, options, notes, void status) and payments."""
     return await api.get(f"/orders/{order_id}")
 
@@ -174,11 +208,11 @@ async def get_top_items(
     date_from: Date = None,
     date_to: Date = None,
     sort: Literal["quantity", "revenue"] = "quantity",
-    category: Annotated[str | None, Field(description="Exact category name.")] = None,
+    category: Category = None,
     limit: Annotated[int, Field(ge=1, le=50)] = 10,
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     """Best-selling menu items in a date range, by quantity or revenue."""
-    return await api.get(
+    items = await api.get(
         "/reports/top-items",
         date_from=date_from,
         date_to=date_to,
@@ -186,20 +220,21 @@ async def get_top_items(
         category=category,
         limit=limit,
     )
+    return {"period": _period(date_from, date_to), "items": items}
 
 
 @mcp.tool(annotations=READ)
-async def get_staff_performance(
-    date_from: Date = None, date_to: Date = None
-) -> list[dict[str, Any]]:
+async def get_staff_performance(date_from: Date = None, date_to: Date = None) -> dict[str, Any]:
     """Orders, revenue and average ticket per staff member, highest revenue first."""
-    return await api.get("/reports/staff", date_from=date_from, date_to=date_to)
+    staff = await api.get("/reports/staff", date_from=date_from, date_to=date_to)
+    return {"period": _period(date_from, date_to), "staff": staff}
 
 
 @mcp.tool(annotations=READ)
-async def get_void_report(date_from: Date = None, date_to: Date = None) -> list[dict[str, Any]]:
+async def get_void_report(date_from: Date = None, date_to: Date = None) -> dict[str, Any]:
     """Voided/cancelled items by item and reason, with lost value. Useful for loss analysis."""
-    return await api.get("/reports/voids", date_from=date_from, date_to=date_to)
+    voids = await api.get("/reports/voids", date_from=date_from, date_to=date_to)
+    return {"period": _period(date_from, date_to), "voids": voids}
 
 
 @mcp.tool(annotations=READ)
@@ -213,7 +248,7 @@ async def get_inventory(
 
 @mcp.tool(annotations=READ)
 async def get_stock_movements(
-    ingredient_id: int,
+    ingredient_id: IngredientId,
     days: Annotated[int, Field(ge=1, le=90)] = 14,
     reason: Literal["sale", "purchase", "waste", "adjustment", "returned"] | None = None,
 ) -> list[dict[str, Any]]:
@@ -233,7 +268,9 @@ async def get_stock_movements(
 async def create_order(
     items: list[OrderLine],
     channel: Literal["dine_in", "takeaway", "delivery"] = "dine_in",
-    table_id: Annotated[int | None, Field(description="Required for dine_in.")] = None,
+    table_id: Annotated[
+        int | None, Field(description="Required for dine_in. Table id from list_tables.")
+    ] = None,
 ) -> dict[str, Any]:
     """Open a new order. Dine-in needs a table without an open order.
 
@@ -245,13 +282,15 @@ async def create_order(
 
 
 @mcp.tool(annotations=WRITE)
-async def add_items_to_order(order_id: int, items: list[OrderLine]) -> dict[str, Any]:
+async def add_items_to_order(order_id: OrderId, items: list[OrderLine]) -> dict[str, Any]:
     """Add items to an existing OPEN order (find it via list_tables.open_order_id)."""
     return await api.post(f"/orders/{order_id}/items", {"items": _lines(items)})
 
 
 @mcp.tool(annotations=WRITE)
-async def set_table_status(table_id: int, status: Literal["free", "reserved"]) -> dict[str, Any]:
+async def set_table_status(
+    table_id: TableId, status: Literal["free", "reserved"]
+) -> dict[str, Any]:
     """Mark a table without an open order as free or reserved."""
     return await api.patch(f"/tables/{table_id}", {"status": status})
 
@@ -292,7 +331,7 @@ async def approve_void(
 
 @mcp.tool(annotations=DESTRUCTIVE)
 async def void_order_item(
-    order_id: int,
+    order_id: OrderId,
     order_item_id: Annotated[int, Field(description="Line id from get_order (not menu id).")],
     reason: Annotated[str, Field(description="Why it is voided, e.g. 'Müşteri vazgeçti'.")],
     approval: Annotated[ElicitationResult[Approval], Resolve(approve_void)],
@@ -326,7 +365,7 @@ async def approve_cancel(
 
 @mcp.tool(annotations=DESTRUCTIVE)
 async def cancel_order(
-    order_id: int,
+    order_id: OrderId,
     reason: str,
     approval: Annotated[ElicitationResult[Approval], Resolve(approve_cancel)],
     return_to_stock: ReturnToStock = False,
@@ -364,7 +403,7 @@ async def approve_payment(
 
 @mcp.tool(annotations=DESTRUCTIVE)
 async def pay_order(
-    order_id: int,
+    order_id: OrderId,
     method: Literal["cash", "card", "online"],
     approval: Annotated[ElicitationResult[Approval], Resolve(approve_payment)],
     discount_percent: Annotated[float, Field(ge=0, le=50)] = 0,
@@ -396,7 +435,7 @@ async def approve_purchase(
 
 @mcp.tool(annotations=WRITE)
 async def record_stock_purchase(
-    ingredient_id: int,
+    ingredient_id: IngredientId,
     quantity: Annotated[float, Field(gt=0, description="In the ingredient's own unit.")],
     approval: Annotated[ElicitationResult[Approval], Resolve(approve_purchase)],
     note: str = "Manuel alım",

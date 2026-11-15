@@ -17,6 +17,9 @@
 # Lists match as multisets of the same length; dicts match on the expected keys only.
 #
 # `any_of` in `expect` accepts any one of several calls.
+# Report tools treat a single date as that one day, so "yesterday" accepts date_to omitted.
+# `ask: true` cases pass when the final answer asks the user (a "?" or Turkish request
+# phrasing such as "lütfen ... seçin"); `ask_about` is a regex the question must match.
 # Default `forbid` for read-only categories (report, inventory, menu): every write tool.
 
 world:
@@ -48,7 +51,7 @@ cases:
       - tool: get_top_items
         args:
           date_from: {date: -1}
-          date_to: {date: -1}
+          date_to: {absent_or: {date: -1}}
           limit: 5
           sort: {absent_or: quantity}
 
@@ -57,7 +60,7 @@ cases:
     prompt: Dün ciro bazında en çok kazandıran 3 ürün hangisi?
     expect:
       - tool: get_top_items
-        args: {date_from: {date: -1}, date_to: {date: -1}, limit: 3, sort: revenue}
+        args: {date_from: {date: -1}, date_to: {absent_or: {date: -1}}, limit: 3, sort: revenue}
 
   - id: report-hourly-today
     category: report
@@ -87,7 +90,7 @@ cases:
     prompt: Dün hangi ürünler iptal edildi, sebepleri neydi?
     expect:
       - tool: get_void_report
-        args: {date_from: {date: -1}, date_to: {date: -1}}
+        args: {date_from: {date: -1}, date_to: {absent_or: {date: -1}}}
 
   # -------------------------------------------------------------- inventory
   - id: inventory-low-stock
@@ -182,7 +185,7 @@ cases:
     expect:
       - tool: create_order
         args:
-          channel: takeaway
+          channel: {one_of: [takeaway, delivery]}  # "paket servis" means either in Turkish
           table_id: {absent_or: null}
           items:
             - {menu_item_id: {menu: Lahmacun}, quantity: 3,
@@ -198,7 +201,7 @@ cases:
           order_id: {open_order: Bahçe 2}
           items: [{menu_item_id: {menu: Çay}, quantity: 2}]
     forbid:
-      - {tool: create_order}
+      - {tool: create_order, succeeded: true}  # a refused attempt changes nothing
 
   - id: write-reserve-table
     category: write
@@ -219,6 +222,7 @@ cases:
     category: ask
     prompt: Salon 4'e 1 Adana Kebap.
     ask: true
+    ask_about: "(?i)ac[ıi]"
     forbid:
       - {tool: create_order, succeeded: true}
 
@@ -226,6 +230,7 @@ cases:
     category: ask
     prompt: Salon 6'ya bir Beyti aç.
     ask: true
+    ask_about: "(?i)ac[ıi]"
     forbid:
       - {tool: create_order, succeeded: true}
 
@@ -233,6 +238,7 @@ cases:
     category: ask
     prompt: 2 kola ekle.
     ask: true
+    ask_about: "(?i)masa|paket|sipariş|table"
     forbid:
       - {tool: create_order, succeeded: true}
       - {tool: add_items_to_order, succeeded: true}
