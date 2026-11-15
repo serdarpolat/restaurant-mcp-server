@@ -1,0 +1,297 @@
+# Turkish tool-calling eval for restaurant-mcp-server.
+#
+# Every case runs on a fresh copy of the same restaurant ("world" below), so results are
+# comparable across models and runs. A case passes when every `expect` requirement is met
+# by at least one successful tool call, and none of the `forbid` rules is broken.
+#
+# Argument matchers (see evals/scoring.py):
+#   plain value          exact match (numbers compared as numbers)
+#   {menu: NAME}         id of a menu item          {table: NAME}      id of a table
+#   {modifier: [ITEM, OPTION]}  option id           {ingredient: NAME} id of an ingredient
+#   {open_order: TABLE}  id of the open order on a table
+#   {order_line: [TABLE, ITEM]} line id of ITEM on that table's open order
+#   {date: N}            local date, N days from today (0 = today, -1 = yesterday)
+#   {regex: PATTERN}     string matching PATTERN    {any: true}       key present
+#   {absent: true}       key not sent               {absent_or: X}    not sent, or matches X
+#   {one_of: [X, Y]}     matches any of the alternatives
+# Lists match as multisets of the same length; dicts match on the expected keys only.
+#
+# `any_of` in `expect` accepts any one of several calls.
+# Default `forbid` for read-only categories (report, inventory, menu): every write tool.
+
+world:
+  reserved_tables: [Teras 1]
+  open_orders:
+    Bahçe 2:
+      - {item: Adana Kebap, quantity: 2, options: [Acılı]}
+      - {item: Ayran, quantity: 2}
+    Salon 5:
+      - {item: İskender, quantity: 1}
+      - {item: Kola, quantity: 1}
+    Teras 2:
+      - {item: Lahmacun, quantity: 3, options: [Acısız]}
+      - {item: Şalgam, quantity: 2}
+
+cases:
+  # ---------------------------------------------------------------- reports
+  - id: report-z-today
+    category: report
+    prompt: Bugünün Z raporunu çıkar.
+    expect:
+      - tool: get_daily_summary
+        args: {day: {absent_or: {date: 0}}}
+
+  - id: report-top5-yesterday
+    category: report
+    prompt: Dün en çok satan 5 ürün hangileriydi?
+    expect:
+      - tool: get_top_items
+        args:
+          date_from: {date: -1}
+          date_to: {date: -1}
+          limit: 5
+          sort: {absent_or: quantity}
+
+  - id: report-top3-revenue-yesterday
+    category: report
+    prompt: Dün ciro bazında en çok kazandıran 3 ürün hangisi?
+    expect:
+      - tool: get_top_items
+        args: {date_from: {date: -1}, date_to: {date: -1}, limit: 3, sort: revenue}
+
+  - id: report-hourly-today
+    category: report
+    prompt: Bugün saat saat satışlar nasıl gidiyor?
+    expect:
+      - tool: get_sales_report
+        args: {group_by: hour, date_from: {absent_or: {date: 0}}}
+
+  - id: report-channels-7d
+    category: report
+    prompt: Son 7 günde paket servis, masa ve kurye satışlarını karşılaştır.
+    expect:
+      - tool: get_sales_report
+        args:
+          group_by: channel
+          date_from: {one_of: [{date: -6}, {date: -7}]}
+
+  - id: report-best-waiter-7d
+    category: report
+    prompt: Son 7 günde en çok ciro yapan garson kim?
+    expect:
+      - tool: get_staff_performance
+        args: {date_from: {one_of: [{date: -6}, {date: -7}]}}
+
+  - id: report-voids-yesterday
+    category: report
+    prompt: Dün hangi ürünler iptal edildi, sebepleri neydi?
+    expect:
+      - tool: get_void_report
+        args: {date_from: {date: -1}, date_to: {date: -1}}
+
+  # -------------------------------------------------------------- inventory
+  - id: inventory-low-stock
+    category: inventory
+    prompt: Stokta azalan malzemeler neler?
+    expect:
+      - tool: get_inventory
+        args: {low_stock_only: true}
+
+  - id: inventory-why-mince-low
+    category: inventory
+    prompt: Dana kıyma neden bu kadar azaldı? Son 14 günün stok hareketlerine bak.
+    expect:
+      - tool: get_stock_movements
+        args: {ingredient_id: {ingredient: Dana Kıyma}, days: {absent_or: 14}}
+
+  - id: inventory-lavash-count
+    category: inventory
+    prompt: Lavaş stoğumuz kaç adet?
+    expect:
+      - tool: get_inventory
+
+  # ------------------------------------------------------------ menu, floor
+  - id: menu-price-iskender
+    category: menu
+    prompt: İskender kaç lira?
+    expect:
+      - any_of:
+          - tool: search_menu
+            args: {query: {regex: "(?i)skender"}}
+          - tool: get_menu_item
+            args: {menu_item_id: {menu: İskender}}
+
+  - id: menu-soups
+    category: menu
+    prompt: Çorba olarak neler var?
+    expect:
+      - any_of:
+          - tool: search_menu
+            args: {category: Çorbalar}
+          - tool: search_menu
+            args: {query: {regex: "(?i)[çc]orba"}}
+
+  - id: floor-free-tables
+    category: menu
+    prompt: Şu an boş masa var mı?
+    expect:
+      - tool: list_tables
+        args: {status: {one_of: [free, {absent: true}]}}
+
+  - id: floor-order-contents
+    category: menu
+    prompt: Bahçe 2'de neler sipariş edilmiş?
+    expect:
+      - tool: get_order
+        args: {order_id: {open_order: Bahçe 2}}
+
+  - id: floor-open-orders
+    category: menu
+    prompt: Şu an açık olan siparişleri listele.
+    expect:
+      - any_of:
+          - tool: list_orders
+            args: {status: open}
+          - tool: list_tables
+            args: {status: {one_of: [occupied, {absent: true}]}}
+
+  - id: floor-bill-total
+    category: menu
+    prompt: Teras 2'nin hesabı ne kadar tuttu?
+    expect:
+      - tool: get_order
+        args: {order_id: {open_order: Teras 2}}
+
+  # ------------------------------------------------------------------ writes
+  - id: write-new-dine-in
+    category: write
+    prompt: Salon 3'e 2 acılı Adana ve 2 ayran aç.
+    expect:
+      - tool: create_order
+        args:
+          table_id: {table: Salon 3}
+          channel: {absent_or: dine_in}
+          items:
+            - {menu_item_id: {menu: Adana Kebap}, quantity: 2,
+               modifier_ids: [{modifier: [Adana Kebap, Acılı]}]}
+            - {menu_item_id: {menu: Ayran}, quantity: 2, modifier_ids: {absent_or: []}}
+
+  - id: write-takeaway
+    category: write
+    prompt: "Paket servis: 3 acısız lahmacun ve 1 şalgam."
+    expect:
+      - tool: create_order
+        args:
+          channel: takeaway
+          table_id: {absent_or: null}
+          items:
+            - {menu_item_id: {menu: Lahmacun}, quantity: 3,
+               modifier_ids: [{modifier: [Lahmacun, Acısız]}]}
+            - {menu_item_id: {menu: Şalgam}, quantity: 1}
+
+  - id: write-add-items
+    category: write
+    prompt: Bahçe 2'ye 2 çay ekle.
+    expect:
+      - tool: add_items_to_order
+        args:
+          order_id: {open_order: Bahçe 2}
+          items: [{menu_item_id: {menu: Çay}, quantity: 2}]
+    forbid:
+      - {tool: create_order}
+
+  - id: write-reserve-table
+    category: write
+    prompt: Salon 1'i akşam için rezerve et.
+    expect:
+      - tool: set_table_status
+        args: {table_id: {table: Salon 1}, status: reserved}
+
+  - id: write-free-reserved-table
+    category: write
+    prompt: Teras 1'deki rezervasyon iptal oldu, masayı boşa çıkar.
+    expect:
+      - tool: set_table_status
+        args: {table_id: {table: Teras 1}, status: free}
+
+  # ------------------------------------------- must ask instead of guessing
+  - id: ask-spice-adana
+    category: ask
+    prompt: Salon 4'e 1 Adana Kebap.
+    ask: true
+    forbid:
+      - {tool: create_order, succeeded: true}
+
+  - id: ask-spice-beyti
+    category: ask
+    prompt: Salon 6'ya bir Beyti aç.
+    ask: true
+    forbid:
+      - {tool: create_order, succeeded: true}
+
+  - id: ask-which-table
+    category: ask
+    prompt: 2 kola ekle.
+    ask: true
+    forbid:
+      - {tool: create_order, succeeded: true}
+      - {tool: add_items_to_order, succeeded: true}
+
+  # ---------------------------------------- risky writes (user approval)
+  - id: approve-cancel
+    category: approval
+    prompt: Bahçe 2'deki siparişi iptal et, müşteri gitti.
+    expect:
+      - tool: cancel_order
+        args:
+          order_id: {open_order: Bahçe 2}
+          reason: {any: true}
+          return_to_stock: {absent_or: false}
+
+  - id: approve-cancel-restock
+    category: approval
+    prompt: >-
+      Teras 2'nin siparişini iptal et; mutfağa gitmeden vazgeçtiler, malzemeleri stoğa geri
+      ekle.
+    expect:
+      - tool: cancel_order
+        args: {order_id: {open_order: Teras 2}, return_to_stock: true}
+
+  - id: approve-void-line
+    category: approval
+    prompt: Bahçe 2'deki ayranları sil, yanlışlıkla girilmiş.
+    expect:
+      - tool: void_order_item
+        args:
+          order_id: {open_order: Bahçe 2}
+          order_item_id: {order_line: [Bahçe 2, Ayran]}
+    forbid:
+      - {tool: cancel_order}
+
+  - id: approve-pay-card
+    category: approval
+    prompt: Salon 5'in hesabını kredi kartıyla kapat.
+    expect:
+      - tool: pay_order
+        args:
+          order_id: {open_order: Salon 5}
+          method: card
+          discount_percent: {absent_or: 0}
+
+  - id: approve-pay-cash-discount
+    category: approval
+    prompt: Salon 5'in hesabını nakit al, %10 sadakat indirimi uygula.
+    expect:
+      - tool: pay_order
+        args:
+          order_id: {open_order: Salon 5}
+          method: cash
+          discount_percent: 10
+          discount_reason: {any: true}
+
+  - id: approve-stock-purchase
+    category: approval
+    prompt: Tedarikçiden 10 kg dana kıyma geldi, stoğa işle.
+    expect:
+      - tool: record_stock_purchase
+        args: {ingredient_id: {ingredient: Dana Kıyma}, quantity: 10}

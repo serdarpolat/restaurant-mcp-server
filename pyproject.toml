@@ -27,7 +27,12 @@ Repository = "https://github.com/serdarpolat/restaurant-mcp-server"
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    "pyyaml>=6.0",
     "ruff>=0.6",
+]
+eval = [
+    "anthropic>=0.49",
+    "pyyaml>=6.0",
 ]
 
 [build-system]
