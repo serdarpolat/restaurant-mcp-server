@@ -43,7 +43,80 @@ Needs only [uv](https://docs.astral.sh/uv/getting-started/installation/) and git
 
 No API to start: in this mode the POS API runs embedded inside the MCP server process.
 
-### Option 2: Docker
+### Option 2: LM Studio, fully local and free
+
+Run everything on your own computer: no API key, no account, and the restaurant data never
+leaves your machine. This is the setup the [evals](#evals-does-the-model-pick-the-right-tool)
+were run with.
+
+**You need**
+
+- [LM Studio](https://lmstudio.ai) 0.3.17 or newer (the first version that can use MCP servers)
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) and
+  [git](https://git-scm.com/downloads), as in option 1
+- A model that supports tool calling. Tested with **Mistral Magistral Small 2509** (24B,
+  Q4_K_M, about 14 GB). Smaller tool-calling models also work but make more mistakes;
+  you can measure any model with the eval.
+
+**Steps**
+
+1. Install uv (Windows PowerShell; for macOS/Linux see the uv link above):
+
+   ```powershell
+   powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+   ```
+
+2. In LM Studio, search for and download the model (for example `magistral-small-2509`).
+3. Load it with a context length of **16k or more**. The 20 tool descriptions alone take
+   several thousand tokens, and a short context makes the model forget the tools.
+4. Open the **Program** tab in the right sidebar, choose **Install > Edit mcp.json**, and add
+   the server. The file uses the same format as Claude Desktop's config:
+
+   ```json
+   {
+     "mcpServers": {
+       "restaurant-pos": {
+         "command": "uvx",
+         "args": [
+           "--from",
+           "git+https://github.com/serdarpolat/restaurant-mcp-server",
+           "restaurant-pos-mcp"
+         ]
+       }
+     }
+   }
+   ```
+
+   If the file already lists other servers, add only the `"restaurant-pos"` entry inside
+   `mcpServers`. The file lives at `%USERPROFILE%\.lmstudio\mcp.json` on Windows and
+   `~/.lmstudio/mcp.json` on macOS and Linux.
+5. Save. LM Studio starts the server by itself; the first start downloads the code and builds
+   the demo data, which takes about 15 seconds. Check that `restaurant-pos` is switched on
+   under **Program**.
+6. Start a new chat and ask, in Turkish or English:
+   - "Bugün en çok satan 5 ürün ne?" (What are today's top 5 items?)
+   - "Salon 3'e 2 Adana aç." (Open an order of 2 Adana kebabs for table Salon 3.)
+     It should ask for the spice level first.
+
+**What you will see**
+
+- LM Studio asks you before each tool call. You can look at the arguments, then allow or
+  deny the call. Allowing a read-only tool for the whole chat saves clicks.
+- Cancelling, voiding, taking payment and adding stock need a second approval from the
+  server itself. If the client shows MCP approval prompts, you get one; otherwise the first
+  call returns a preview and changes nothing, the model shows it to you, and only after
+  you say yes does it call again to run it.
+
+**If it does not work**
+
+- *The model answers without calling any tool:* check that the server is switched on, and
+  that the model supports tool calling (LM Studio marks such models with a tool icon).
+- *The server does not start:* run `uvx --version` and `git --version` in a terminal. If
+  either is not found, install it and restart LM Studio.
+- *The model loops or forgets what it was doing:* raise the context length and reload the
+  model.
+
+### Option 3: Docker
 
 ```bash
 git clone https://github.com/serdarpolat/restaurant-mcp-server
@@ -54,13 +127,13 @@ docker compose up
 - POS API with interactive docs: http://localhost:8000/docs
 - MCP server over Streamable HTTP: http://localhost:8001/mcp
 
-### Option 3: From source
+### Option 4: From source
 
 ```bash
 git clone https://github.com/serdarpolat/restaurant-mcp-server
 cd restaurant-mcp-server
 uv sync --extra dev
-uv run pytest                 # 55 tests
+uv run pytest                 # 57 tests
 uv run restaurant-pos-api     # http://127.0.0.1:8000/docs
 uv run restaurant-pos-mcp     # MCP server over stdio
 ```
@@ -200,20 +273,22 @@ must fail for the right reasons (`tests/test_evals.py`).
 ### Results: what better tool design buys
 
 Model: Mistral Magistral Small 2509 (24B, Q4_K_M) running locally in LM Studio. A model's
-answers vary from run to run, so each version ran the full set several times (v1 3 times,
-v2 6 times), all scored with the same rules.
+answers vary from run to run, so each version ran the full set several times (v1 and v3 3
+times, v2 6 times), all scored with the same rules.
 
-| | Before (v1) | After (v2) |
-|---|---:|---:|
-| Passed | 59/90 (66%) | **155/180 (86%)** |
-| Passed per run (of 30) | 19 · 20 · 20 | 26 · 27 · 27 · 26 · 26 · 23 |
-| Right tool chosen | 82% | 97% |
-| Approval-gated actions | 7/18 (39%) | **35/36 (97%)** |
-| Orders and table changes | 7/15 (47%) | 21/30 (70%) |
-| Input tokens per case | 13.5k | 14.4k |
+| | v1 | v2 | v3 |
+|---|---:|---:|---:|
+| Passed | 59/90 (66%) | 155/180 (86%) | **86/90 (96%)** |
+| Passed per run (of 30) | 19 · 20 · 20 | 26 · 27 · 27 · 26 · 26 · 23 | 28 · 29 · 29 |
+| Right tool chosen | 82% | 97% | 99% |
+| Approval-gated actions | 7/18 (39%) | 35/36 (97%) | **18/18** |
+| Orders and table changes | 7/15 (47%) | 21/30 (70%) | **15/15** |
+| Input tokens per case | 13.5k | 14.4k | 17.0k |
 
-The model did not change; only the MCP server did. The worst v2 run beats the best v1 run.
-What changed, each driven by a failure the eval caught:
+The model did not change; only the MCP server did. Each version's worst run beats the
+previous version's best. Every change was driven by a failure the eval caught.
+
+**v1 → v2: say what you mean**
 
 - **"Don't ask, call."** The model asked "are you sure?" in chat instead of calling the cancel
   tool, which already asks the user itself. The instructions now say so.
@@ -227,9 +302,30 @@ What changed, each driven by a failure the eval caught:
 - **Answers that state their scope.** Called without dates, a report silently covered today;
   the model presented it as yesterday. Reports now echo the period they cover.
 
-Still failing in v2: writing the wrong year (2024 instead of 2026), guessing a table or order
-id instead of looking it up ("Salon 1" became table id 0 in every run), and now and then
-asking a question instead of placing a takeaway order.
+**v2 → v3: don't trust, check**
+
+Telling the model where ids come from was not enough: it still guessed ids and years. v3
+makes the server catch those mistakes and say how to fix them.
+
+- **Impossible dates are refused.** "Yesterday" became `2024-11-14`, and an empty report read
+  as "nothing was voided". Dates in the future or over a year back now fail with
+  `today is 2026-11-15. Did you mean 2026-11-14?`, and the model retries.
+- **Ids come with a name.** `set_table_status` also takes `table_name`, the stock tools take
+  `ingredient_name`. If they disagree, nothing changes and the error gives the right id
+  (`table_id 1 is 'Salon 1', not 'Teras 1'. 'Teras 1' is table_id 14.`). Before, the wrong
+  table was changed silently.
+- **Output keys match the parameters they feed.** `list_tables` returned `id` next to
+  `open_order_id`, and the model sometimes passed the table's id as an order id. It now
+  returns `table_id`; `get_inventory` returns `ingredient_id`.
+- **"Paket servis" needs no table.** The model asked which table a takeaway order was for.
+  The instructions now map "paket" to takeaway and "kurye" to delivery.
+
+The cost: about 18% more input tokens per case, from longer instructions and the retries
+that the new errors trigger. A retry is cheaper than a wrong write.
+
+Still failing in v3 (4 of 90): leaving out an argument on a simple read (`group_by=hour`,
+`status=open`), repeating the same wrong year after the hint, and once answering a stock
+question without looking at the stock movements.
 Full logs of the latest 3-run batch per version: [`evals/results/`](evals/results/).
 
 ## Roadmap
