@@ -115,7 +115,10 @@ def add_items(order_id: int, body: OrderItemsAdd, session: SessionDep, actor: Ac
 def void_item(
     order_id: int, item_id: int, body: ReasonRequest, session: SessionDep, actor: ActorDep
 ):
-    return to_read(session, service.void_item(session, order_id, item_id, body.reason, actor))
+    return to_read(
+        session,
+        service.void_item(session, order_id, item_id, body.reason, actor, body.return_to_stock),
+    )
 
 
 @router.post("/{order_id}/pay", response_model=OrderRead)
@@ -125,4 +128,6 @@ def pay_order(order_id: int, body: PayRequest, session: SessionDep, actor: Actor
 
 @router.post("/{order_id}/cancel", response_model=OrderRead)
 def cancel_order(order_id: int, body: ReasonRequest, session: SessionDep, actor: ActorDep):
-    return to_read(session, service.cancel_order(session, order_id, body.reason, actor))
+    return to_read(
+        session, service.cancel_order(session, order_id, body.reason, actor, body.return_to_stock)
+    )

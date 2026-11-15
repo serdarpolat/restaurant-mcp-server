@@ -45,6 +45,13 @@ WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world
 DESTRUCTIVE = ToolAnnotations(read_only_hint=False, destructive_hint=True, open_world_hint=False)
 
 Date = Annotated[str | None, Field(description="Local date, YYYY-MM-DD. Default: today.")]
+ReturnToStock = Annotated[
+    bool,
+    Field(
+        description="Put the ingredients back in stock. Only if the food was NOT prepared yet; "
+        "ask the user if unsure."
+    ),
+]
 ConfirmToken = Annotated[
     str | None,
     Field(description="Token from a previous 'confirmation_required' answer. Omit on first call."),
@@ -208,9 +215,10 @@ async def get_inventory(
 async def get_stock_movements(
     ingredient_id: int,
     days: Annotated[int, Field(ge=1, le=90)] = 14,
-    reason: Literal["sale", "purchase", "waste", "adjustment"] | None = None,
+    reason: Literal["sale", "purchase", "waste", "adjustment", "returned"] | None = None,
 ) -> list[dict[str, Any]]:
-    """Stock ledger of one ingredient (sales, purchases, waste). Explains WHY stock changed."""
+    """Stock ledger of one ingredient (sales, purchases, waste, returns). Explains WHY stock
+    changed."""
     return await api.get(
         f"/inventory/ingredients/{ingredient_id}/movements", days=days, reason=reason
     )
@@ -256,14 +264,29 @@ async def set_table_status(table_id: int, status: Literal["free", "reserved"]) -
 # --------------------------------------------------------------------------- #
 
 
+def _stock_note(return_to_stock: bool) -> str:
+    return " Ingredients go back to stock." if return_to_stock else " Stock is not returned."
+
+
 async def approve_void(
-    ctx: Context, order_id: int, order_item_id: int, reason: str, confirmation_token: str | None
+    ctx: Context,
+    order_id: int,
+    order_item_id: int,
+    reason: str,
+    return_to_stock: bool,
+    confirmation_token: str | None,
 ) -> Elicit[Approval] | Gate:
     order = await api.get(f"/orders/{order_id}")
     line = next((i for i in order["items"] if i["id"] == order_item_id), None)
     described = f"{line['quantity']} x {line['name']}" if line else f"item #{order_item_id}"
-    preview = f"Void {described} on order #{order_id} ({_where(order)}). Reason: {reason}"
-    args = {"order_id": order_id, "order_item_id": order_item_id, "reason": reason}
+    preview = f"Void {described} on order #{order_id} ({_where(order)}). Reason: {reason}."
+    preview += _stock_note(return_to_stock)
+    args = {
+        "order_id": order_id,
+        "order_item_id": order_item_id,
+        "reason": reason,
+        "return_to_stock": return_to_stock,
+    }
     return gate(ctx, "void_order_item", args, preview, confirmation_token)
 
 
@@ -273,23 +296,31 @@ async def void_order_item(
     order_item_id: Annotated[int, Field(description="Line id from get_order (not menu id).")],
     reason: Annotated[str, Field(description="Why it is voided, e.g. 'Müşteri vazgeçti'.")],
     approval: Annotated[ElicitationResult[Approval], Resolve(approve_void)],
+    return_to_stock: ReturnToStock = False,
     confirmation_token: ConfirmToken = None,
 ) -> dict[str, Any]:
     """Void (cancel) one line of an open order. Requires user approval."""
     if (response := blocked(approval)) is not None:
         return response
-    return await api.post(f"/orders/{order_id}/items/{order_item_id}/void", {"reason": reason})
+    return await api.post(
+        f"/orders/{order_id}/items/{order_item_id}/void",
+        {"reason": reason, "return_to_stock": return_to_stock},
+    )
 
 
 async def approve_cancel(
-    ctx: Context, order_id: int, reason: str, confirmation_token: str | None
+    ctx: Context,
+    order_id: int,
+    reason: str,
+    return_to_stock: bool,
+    confirmation_token: str | None,
 ) -> Elicit[Approval] | Gate:
     order = await api.get(f"/orders/{order_id}")
     preview = (
         f"Cancel order #{order_id} ({_where(order)}, {len(order['items'])} lines, "
-        f"{_money(order['total'])}). Reason: {reason}"
-    )
-    args = {"order_id": order_id, "reason": reason}
+        f"{_money(order['total'])}). Reason: {reason}."
+    ) + _stock_note(return_to_stock)
+    args = {"order_id": order_id, "reason": reason, "return_to_stock": return_to_stock}
     return gate(ctx, "cancel_order", args, preview, confirmation_token)
 
 
@@ -298,12 +329,15 @@ async def cancel_order(
     order_id: int,
     reason: str,
     approval: Annotated[ElicitationResult[Approval], Resolve(approve_cancel)],
+    return_to_stock: ReturnToStock = False,
     confirmation_token: ConfirmToken = None,
 ) -> dict[str, Any]:
     """Cancel a whole open order and free its table. Requires user approval."""
     if (response := blocked(approval)) is not None:
         return response
-    return await api.post(f"/orders/{order_id}/cancel", {"reason": reason})
+    return await api.post(
+        f"/orders/{order_id}/cancel", {"reason": reason, "return_to_stock": return_to_stock}
+    )
 
 
 async def approve_payment(

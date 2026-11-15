@@ -63,6 +63,7 @@ class StockReason(str, Enum):
     purchase = "purchase"
     waste = "waste"
     adjustment = "adjustment"
+    returned = "returned"  # ingredients of a voided/cancelled line that was never prepared
 
 
 # ---------- Staff ----------

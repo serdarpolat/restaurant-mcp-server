@@ -145,3 +145,67 @@ def test_table_with_open_order_cannot_be_freed(client):
     client.post("/orders", json=_adana_order(client, table["id"]))
     r = client.patch(f"/tables/{table['id']}", json={"status": "free"})
     assert r.status_code == 409
+
+
+def _stock(session, name: str) -> Decimal:
+    session.expire_all()
+    return session.exec(select(Ingredient).where(Ingredient.name == name)).one().stock_qty
+
+
+def test_count_ingredients_are_used_in_whole_pieces(client, session):
+    adana = find_item(client, "Adana Kebap")
+    lavas, kiyma = _stock(session, "Lavaş"), _stock(session, "Dana Kıyma")
+    line = {
+        "menu_item_id": adana["id"],
+        "modifier_ids": [
+            modifier_id(client, adana["id"], "Acısız"),
+            modifier_id(client, adana["id"], "1.5 Porsiyon"),
+        ],
+    }
+    client.post("/orders", json={"channel": "takeaway", "items": [line]})
+    assert lavas - _stock(session, "Lavaş") == 2  # 1.5 lavaş rounds up to 2 pieces
+    assert kiyma - _stock(session, "Dana Kıyma") == Decimal("0.3")  # weights stay exact
+
+
+def test_cancel_keeps_stock_used_unless_returned(client, session):
+    before = _stock(session, "Dana Kıyma")
+    table = free_table(client)
+    order = client.post("/orders", json=_adana_order(client, table["id"])).json()
+    client.post(f"/orders/{order['id']}/cancel", json={"reason": "Müşteri gitti"})
+    assert before - _stock(session, "Dana Kıyma") == Decimal("0.4")  # food was prepared
+
+    table = free_table(client)
+    order = client.post("/orders", json=_adana_order(client, table["id"])).json()
+    client.post(
+        f"/orders/{order['id']}/cancel",
+        json={"reason": "Mutfağa gitmeden iptal", "return_to_stock": True},
+    )
+    assert before - _stock(session, "Dana Kıyma") == Decimal("0.4")  # second order returned
+
+    kiyma = session.exec(select(Ingredient).where(Ingredient.name == "Dana Kıyma")).one()
+    returns = client.get(
+        f"/inventory/ingredients/{kiyma.id}/movements", params={"reason": "returned"}
+    ).json()
+    assert [(r["change"], r["note"]) for r in returns] == [(0.4, f"İade: Sipariş #{order['id']}")]
+
+
+def test_void_can_return_one_line_to_stock(client, session):
+    table = free_table(client)
+    order = client.post("/orders", json=_adana_order(client, table["id"], 1)).json()
+    ayran = find_item(client, "Ayran")
+    order = client.post(
+        f"/orders/{order['id']}/items",
+        json={"items": [{"menu_item_id": ayran["id"], "quantity": 3}]},
+    ).json()
+    before = _stock(session, "Ayran")
+    line = next(i for i in order["items"] if i["name"] == "Ayran")
+    client.post(
+        f"/orders/{order['id']}/items/{line['id']}/void",
+        json={"reason": "Yanlış giriş", "return_to_stock": True},
+    )
+    assert _stock(session, "Ayran") - before == 3
+
+
+def test_seeded_count_ingredients_have_whole_stock(session):
+    for ing in session.exec(select(Ingredient).where(Ingredient.unit == "adet")).all():
+        assert ing.stock_qty == ing.stock_qty.to_integral_value(), ing.name

@@ -26,7 +26,7 @@ import random
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
 
 from sqlalchemy.engine import Engine
 from sqlmodel import Session, select
@@ -58,6 +58,7 @@ from pos_api.db.models import (
     StockReason,
     TableStatus,
 )
+from pos_api.stock import COUNT_UNITS, line_consumption, portion_multiplier
 
 SEED = 42
 DAYS = 90
@@ -772,9 +773,11 @@ def seed_orders(session: Session, ctx: Ctx, now: datetime) -> dict[date, dict[st
                 for oi, (name, _, mods) in zip(items, build_lines_cache(items, ctx)):
                     if oi.status == OrderItemStatus.void:
                         continue
-                    mult = D("1.5") if any(m.name == "1.5 Porsiyon" for m in mods) else D("1")
+                    mult = portion_multiplier(m.name for m in mods)
                     for ing, per_portion in ctx.specs[name].recipe.items():
-                        consumption[day][ing] += D(str(per_portion)) * oi.quantity * mult
+                        consumption[day][ing] += line_consumption(
+                            D(str(per_portion)), oi.quantity, mult, INGREDIENTS[ing][0]
+                        )
 
             session.add(order)
 
@@ -866,6 +869,8 @@ def seed_stock(
             if name in DELAYED_INGREDIENTS and d >= delay_start and stock - used < avg * D("0.4"):
                 # Supplier is late: only a small emergency purchase from the market
                 qty = q3(max(used, avg * D("0.6")) - (stock - used))
+                if ing.unit in COUNT_UNITS:
+                    qty = qty.to_integral_value(rounding=ROUND_CEILING)
                 if qty > 0:
                     stock += qty
                     session.add(

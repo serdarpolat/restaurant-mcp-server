@@ -149,6 +149,10 @@ class OrderItemsAdd(BaseModel):
 
 class ReasonRequest(BaseModel):
     reason: str = Field(min_length=3, max_length=200)
+    return_to_stock: bool = Field(
+        default=False,
+        description="Put the ingredients back in stock (only if the food was never prepared).",
+    )
 
 
 class PayRequest(BaseModel):

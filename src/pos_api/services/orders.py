@@ -23,10 +23,8 @@ from pos_api.db.models import (
 from pos_api.errors import Conflict, Invalid, NotFound
 from pos_api.schemas import OrderCreate, OrderItemCreate, PayRequest
 from pos_api.services import audit
+from pos_api.stock import line_consumption, portion_multiplier
 from pos_api.timeutil import now
-
-PORTION_MULTIPLIERS = {"1.5 Porsiyon": Decimal("1.5")}
-
 
 # ---------- Lookups ----------
 
@@ -90,20 +88,24 @@ def _build_line(session: Session, data: OrderItemCreate) -> tuple[OrderItem, lis
     return line, chosen
 
 
+def _line_needs(session: Session, line: OrderItem, modifier_names: list[str]) -> dict[int, Decimal]:
+    """Ingredient id -> quantity consumed by one order line."""
+    item = session.get(MenuItem, line.menu_item_id)
+    mult = portion_multiplier(modifier_names)
+    return {
+        r.ingredient_id: line_consumption(r.quantity, line.quantity, mult, r.ingredient.unit)
+        for r in item.recipe
+    }
+
+
 def _consume_stock(
     session: Session, order_id: int, lines: list[tuple[OrderItem, list[Modifier]]]
 ) -> None:
     """Deduct ingredients for the given lines. Refuses if anything would go negative."""
     needed: dict[int, Decimal] = {}
     for line, mods in lines:
-        item = session.get(MenuItem, line.menu_item_id)
-        mult = Decimal(1)
-        for m in mods:
-            mult *= PORTION_MULTIPLIERS.get(m.name, Decimal(1))
-        for r in item.recipe:
-            needed[r.ingredient_id] = needed.get(r.ingredient_id, Decimal(0)) + (
-                r.quantity * line.quantity * mult
-            )
+        for i, qty in _line_needs(session, line, [m.name for m in mods]).items():
+            needed[i] = needed.get(i, Decimal(0)) + qty
 
     ingredients = {i: session.get(Ingredient, i) for i in needed}
     short = [
@@ -123,6 +125,28 @@ def _consume_stock(
                 change=-needed[i],
                 reason=StockReason.sale,
                 note=f"Sipariş #{order_id}",
+                created_at=ts,
+            )
+        )
+
+
+def _return_stock(session: Session, order_id: int, lines: list[OrderItem]) -> None:
+    """Put back the ingredients of lines that were never prepared (voided or cancelled)."""
+    returned: dict[int, Decimal] = {}
+    for line in lines:
+        names = [n for n in line.modifiers.split(", ") if n]
+        for i, qty in _line_needs(session, line, names).items():
+            returned[i] = returned.get(i, Decimal(0)) + qty
+
+    ts = now()
+    for i, qty in returned.items():
+        session.get(Ingredient, i).stock_qty += qty
+        session.add(
+            StockMovement(
+                ingredient_id=i,
+                change=qty,
+                reason=StockReason.returned,
+                note=f"İade: Sipariş #{order_id}",
                 created_at=ts,
             )
         )
@@ -202,7 +226,14 @@ def add_items(session: Session, order_id: int, items: list[OrderItemCreate], act
     return order
 
 
-def void_item(session: Session, order_id: int, item_id: int, reason: str, actor: str) -> Order:
+def void_item(
+    session: Session,
+    order_id: int,
+    item_id: int,
+    reason: str,
+    actor: str,
+    return_to_stock: bool = False,
+) -> Order:
     order = get_open_order(session, order_id)
     line = next((i for i in order.items if i.id == item_id), None)
     if not line:
@@ -211,9 +242,19 @@ def void_item(session: Session, order_id: int, item_id: int, reason: str, actor:
         raise Conflict(f"Item #{item_id} is already void.")
     line.status = OrderItemStatus.void
     line.void_reason = reason
+    if return_to_stock:
+        _return_stock(session, order.id, [line])
     recompute_totals(order)
     audit.record(
-        session, actor, "void_item", {"order_id": order.id, "item_id": item_id, "reason": reason}
+        session,
+        actor,
+        "void_item",
+        {
+            "order_id": order.id,
+            "item_id": item_id,
+            "reason": reason,
+            "return_to_stock": return_to_stock,
+        },
     )
     session.commit()
     session.refresh(order)
@@ -249,17 +290,26 @@ def pay_order(session: Session, order_id: int, data: PayRequest, actor: str) -> 
     return order
 
 
-def cancel_order(session: Session, order_id: int, reason: str, actor: str) -> Order:
+def cancel_order(
+    session: Session, order_id: int, reason: str, actor: str, return_to_stock: bool = False
+) -> Order:
     order = get_open_order(session, order_id)
-    for line in order.items:
-        if line.status == OrderItemStatus.active:
-            line.status = OrderItemStatus.void
-            line.void_reason = reason
+    active = [line for line in order.items if line.status == OrderItemStatus.active]
+    for line in active:
+        line.status = OrderItemStatus.void
+        line.void_reason = reason
+    if return_to_stock:
+        _return_stock(session, order.id, active)
     recompute_totals(order)
     order.status = OrderStatus.cancelled
     order.closed_at = now()
     _release_table(session, order)
-    audit.record(session, actor, "cancel_order", {"order_id": order.id, "reason": reason})
+    audit.record(
+        session,
+        actor,
+        "cancel_order",
+        {"order_id": order.id, "reason": reason, "return_to_stock": return_to_stock},
+    )
     session.commit()
     session.refresh(order)
     return order

@@ -16,7 +16,10 @@ def _usage_by_ingredient(session: Session) -> dict[int, Decimal]:
     since = now() - timedelta(days=USAGE_WINDOW_DAYS)
     rows = session.exec(
         select(StockMovement.ingredient_id, func.sum(StockMovement.change))
-        .where(StockMovement.reason == StockReason.sale, StockMovement.created_at >= since)
+        .where(
+            StockMovement.reason.in_([StockReason.sale, StockReason.returned]),
+            StockMovement.created_at >= since,
+        )
         .group_by(StockMovement.ingredient_id)
     ).all()
     return {i: -Decimal(str(total)) / USAGE_WINDOW_DAYS for i, total in rows}

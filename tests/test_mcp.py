@@ -86,6 +86,7 @@ async def test_cancel_needs_token_and_token_is_bound_to_arguments(pos_api):
         first = data(await client.call_tool("cancel_order", args))
         assert first["status"] == "confirmation_required"
         assert f"#{order['id']}" in first["preview"]
+        assert "Stock is not returned" in first["preview"]
         assert (
             data(await client.call_tool("get_order", {"order_id": order["id"]}))["status"] == "open"
         )
@@ -97,6 +98,14 @@ async def test_cancel_needs_token_and_token_is_bound_to_arguments(pos_api):
         }
         assert (
             data(await client.call_tool("cancel_order", tampered))["status"]
+            == "confirmation_invalid"
+        )
+
+        # Changing return_to_stock also invalidates the token.
+        token = data(await client.call_tool("cancel_order", args))["confirmation_token"]
+        restock = args | {"return_to_stock": True, "confirmation_token": token}
+        assert (
+            data(await client.call_tool("cancel_order", restock))["status"]
             == "confirmation_invalid"
         )
 
