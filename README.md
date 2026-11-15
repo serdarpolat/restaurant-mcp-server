@@ -69,7 +69,7 @@ were run with.
 2. In LM Studio, search for and download the model (for example `magistral-small-2509`).
 3. Load it with a context length of **16k or more**. The 20 tool descriptions alone take
    several thousand tokens, and a short context makes the model forget the tools.
-4. Open the **Program** tab in the right sidebar, choose **Install > Edit mcp.json**, and add
+4. Open the **Program** tab, choose **Install > Edit mcp.json**, and add
    the server. The file uses the same format as Claude Desktop's config:
 
    ```json
@@ -91,26 +91,33 @@ were run with.
    `mcpServers`. The file lives at `%USERPROFILE%\.lmstudio\mcp.json` on Windows and
    `~/.lmstudio/mcp.json` on macOS and Linux.
 5. Save. LM Studio starts the server by itself; the first start downloads the code and builds
-   the demo data, which takes about 15 seconds. Check that `restaurant-pos` is switched on
-   under **Program**.
-6. Start a new chat and ask, in Turkish or English:
+   the demo data, which takes about 15 seconds. `restaurant-pos` should now appear under
+   **Program** with its tools.
+6. Start a new chat and turn the server on for it: click the hammer icon under the message
+   box and pick `restaurant-pos`. It then shows as a chip next to the icon. Servers are
+   switched on per chat. Then ask, in Turkish or English:
    - "Bugün en çok satan 5 ürün ne?" (What are today's top 5 items?)
    - "Salon 3'e 2 Adana aç." (Open an order of 2 Adana kebabs for table Salon 3.)
      It should ask for the spice level first.
 
 **What you will see**
 
-- LM Studio asks you before each tool call. You can look at the arguments, then allow or
-  deny the call. Allowing a read-only tool for the whole chat saves clicks.
-- Cancelling, voiding, taking payment and adding stock need a second approval from the
-  server itself. If the client shows MCP approval prompts, you get one; otherwise the first
-  call returns a preview and changes nothing, the model shows it to you, and only after
-  you say yes does it call again to run it.
+- LM Studio asks your permission before the model uses the server's tools. Each tool call
+  appears in the chat; click it to see the arguments and the server's answer.
+- Cancelling, voiding, taking payment and adding stock need a second approval, from the
+  server itself. LM Studio has no approval window for this, so it happens in the chat: the
+  first call changes nothing and returns a preview, the model shows it to you
+  ("Sipariş #9349 ... iptal edilecek. Onaylıyor musunuz?"), and only after you say yes does
+  it call again with the one-time token from the preview.
 
 **If it does not work**
 
-- *The model answers without calling any tool:* check that the server is switched on, and
-  that the model supports tool calling (LM Studio marks such models with a tool icon).
+- *The model answers without calling any tool:* check that `restaurant-pos` is switched on
+  for this chat (step 6) and that the model supports tool calling (the model's page in LM
+  Studio says so).
+- *The model says it is "an AI for something else":* a system prompt from an earlier use is
+  still set for the chat. Clear the System Prompt field in the chat settings and start a
+  new chat.
 - *The server does not start:* run `uvx --version` and `git --version` in a terminal. If
   either is not found, install it and restart LM Studio.
 - *The model loops or forgets what it was doing:* raise the context length and reload the
@@ -133,7 +140,7 @@ docker compose up
 git clone https://github.com/serdarpolat/restaurant-mcp-server
 cd restaurant-mcp-server
 uv sync --extra dev
-uv run pytest                 # 57 tests
+uv run pytest                 # 58 tests
 uv run restaurant-pos-api     # http://127.0.0.1:8000/docs
 uv run restaurant-pos-mcp     # MCP server over stdio
 ```
@@ -177,7 +184,9 @@ Cancelling, voiding, taking payment and changing stock never run on the model's 
    preview plus a short-lived token bound to the exact arguments. Only a second call with that
    token executes, so what runs is exactly what was previewed. (In this mode, asking the user
    in between relies on the model following the tool instructions; elicitation is the hard
-   guarantee.)
+   guarantee.) Pending tokens are kept on disk, so the approval still works if the client
+   restarts the server between the preview and the approval (seen in LM Studio). A rejected token comes back with the
+   reason and a fresh preview, so the model can ask again instead of giving up.
 
 Every write is recorded in the audit log with the actor `mcp:assistant`.
 

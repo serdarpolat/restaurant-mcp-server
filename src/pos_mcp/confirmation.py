@@ -10,15 +10,22 @@ Two layers, strongest available first:
    that what runs is exactly what was previewed; asking the user in between
    relies on the model following the tool instructions.
 
+   Pending tokens are kept in a small file, not in memory: some clients (LM Studio)
+   reach the server through a new process between the preview and the approval,
+   and an in-memory token would be lost. A rejected token always comes back with a
+   fresh preview and token, so the model can ask the user again instead of stopping.
+
 Each guarded tool has a small resolver (see server.py) that builds the preview
 and returns `gate(...)`. The MCP SDK runs the resolver before the tool body.
 """
 
 import hashlib
 import json
+import os
 import secrets
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from mcp.server.elicitation import AcceptedElicitation, ElicitationResult
@@ -27,7 +34,6 @@ from mcp.server.mcpserver.resolve import Elicit
 from pydantic import BaseModel, Field
 
 TOKEN_TTL_SECONDS = 300
-_pending: dict[str, tuple[str, float]] = {}  # token -> (fingerprint, expires_at)
 
 DECLINED = {"status": "declined", "message": "The user declined. Nothing was changed."}
 
@@ -48,6 +54,74 @@ def _fingerprint(action: str, args: dict[str, Any]) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+def _store_path() -> Path:
+    base = os.getenv("POS_MCP_STATE_DIR") or Path.home() / ".restaurant-mcp-server"
+    return Path(base) / "pending_confirmations.json"
+
+
+def _load() -> dict[str, dict[str, Any]]:
+    """Pending tokens that have not expired: token -> {action, fingerprint, args, expires}."""
+    try:
+        pending = json.loads(_store_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    now = time.time()
+    return {t: p for t, p in pending.items() if isinstance(p, dict) and p.get("expires", 0) > now}
+
+
+def _save(pending: dict[str, dict[str, Any]]) -> None:
+    path = _store_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(f".{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(pending, ensure_ascii=False, default=str), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _why_rejected(stored: dict[str, Any] | None, action: str, args: dict[str, Any]) -> str:
+    if stored is None:
+        return (
+            "The confirmation token is unknown: it expired (tokens last "
+            f"{TOKEN_TTL_SECONDS // 60} minutes), was already used, or was copied wrongly."
+        )
+    if stored["action"] != action:
+        return f"The confirmation token was issued for {stored['action']}, not {action}."
+    old = stored.get("args", {})
+    changed = [
+        f"{key} ({old.get(key)!r} -> {args.get(key)!r})"
+        for key in sorted(set(old) | set(args))
+        if json.dumps(old.get(key), default=str) != json.dumps(args.get(key), default=str)
+    ]
+    return "The arguments changed since the preview: " + ", ".join(changed) + "."
+
+
+def _issue(action: str, args: dict[str, Any], preview: str, why: str | None) -> Gate:
+    pending = _load()
+    token = secrets.token_urlsafe(8)
+    pending[token] = {
+        "action": action,
+        "fingerprint": _fingerprint(action, args),
+        "args": args,
+        "expires": time.time() + TOKEN_TTL_SECONDS,
+    }
+    _save(pending)
+    response: dict[str, Any] = {
+        "status": "confirmation_required",
+        "preview": preview,
+        "confirmation_token": token,
+        "message": "NOTHING HAS BEEN CHANGED YET. Show this preview to the user and ask "
+        "for explicit approval. Only if they approve, call this tool again with the same "
+        "arguments plus this confirmation_token.",
+    }
+    if why:
+        response["status"] = "confirmation_invalid"
+        response["message"] = (
+            f"{why} Nothing was changed. Below is a fresh preview for the arguments you sent: "
+            "show it to the user and ask again. Only if they approve, call this tool again "
+            "with the same arguments plus the NEW confirmation_token."
+        )
+    return Gate(response)
+
+
 def _supports_elicitation(ctx: Context) -> bool:
     caps = ctx.client_capabilities
     return bool(caps and caps.elicitation)
@@ -56,38 +130,18 @@ def _supports_elicitation(ctx: Context) -> bool:
 def gate(
     ctx: Context, action: str, args: dict[str, Any], preview: str, token: str | None
 ) -> Elicit[Approval] | Gate:
-    fingerprint = _fingerprint(action, args)
-
     if token:
-        stored = _pending.pop(token, None)
-        if stored and stored[0] == fingerprint and stored[1] > time.time():
+        pending = _load()
+        stored = pending.pop(token.strip(), None)
+        _save(pending)  # a token works once, whatever the outcome
+        if stored and stored["fingerprint"] == _fingerprint(action, args):
             return Gate()
-        return Gate(
-            {
-                "status": "confirmation_invalid",
-                "message": "The confirmation token is invalid, expired, or the arguments "
-                "changed. Call again without a token to get a fresh preview.",
-            }
-        )
+        return _issue(action, args, preview, _why_rejected(stored, action, args))
 
     if _supports_elicitation(ctx):
         return Elicit(f"{preview}\n\nApprove?", Approval)
 
-    now = time.time()
-    for old in [t for t, (_, exp) in _pending.items() if exp < now]:
-        del _pending[old]
-    new_token = secrets.token_urlsafe(8)
-    _pending[new_token] = (fingerprint, now + TOKEN_TTL_SECONDS)
-    return Gate(
-        {
-            "status": "confirmation_required",
-            "preview": preview,
-            "confirmation_token": new_token,
-            "message": "NOTHING HAS BEEN CHANGED YET. Show this preview to the user and ask "
-            "for explicit approval. Only if they approve, call this tool again with the same "
-            "arguments plus this confirmation_token.",
-        }
-    )
+    return _issue(action, args, preview, None)
 
 
 def blocked(outcome: ElicitationResult[Any]) -> dict[str, Any] | None:

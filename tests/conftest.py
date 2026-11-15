@@ -10,6 +10,12 @@ from pos_api.db.seed import seed
 from pos_api.main import app
 
 
+@pytest.fixture(autouse=True)
+def _confirmation_store(tmp_path, monkeypatch):
+    """Keep pending confirmation tokens out of the real home folder."""
+    monkeypatch.setenv("POS_MCP_STATE_DIR", str(tmp_path / "state"))
+
+
 @pytest.fixture(scope="session")
 def template_db(tmp_path_factory) -> Path:
     """Seed a small database once; each test gets its own copy."""

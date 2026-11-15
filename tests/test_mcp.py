@@ -222,3 +222,40 @@ async def test_ids_are_checked_against_the_name_the_user_said(pos_api):
     for result in (guessed, purchase):  # nothing previewed or changed for the wrong item
         assert result.is_error
         assert f"= ingredient_id {kiyma['ingredient_id']}" in result.content[0].text
+
+
+async def test_tokens_survive_a_server_restart_and_rejections_explain_themselves(pos_api, tmp_path):
+    """LM Studio may reach the server through a new process between preview and approval."""
+    from pos_mcp import confirmation
+
+    async with Client(mcp) as client:
+        order = await open_adana_order(client)
+        args = {"order_id": order["id"], "reason": "Müşteri gitti", "return_to_stock": True}
+        first = data(await client.call_tool("cancel_order", args))
+        token = first["confirmation_token"]
+        # the pending token lives on disk, so a new server process can still accept it
+        assert token in confirmation._store_path().read_text(encoding="utf-8")
+
+        changed = data(
+            await client.call_tool(
+                "cancel_order", args | {"reason": "Başka", "confirmation_token": token}
+            )
+        )
+        assert changed["status"] == "confirmation_invalid"
+        assert "reason ('Müşteri gitti' -> 'Başka')" in changed["message"]
+        assert "Başka" in changed["preview"]  # a fresh preview for what was actually sent
+
+        unknown = data(
+            await client.call_tool("cancel_order", args | {"confirmation_token": "nope"})
+        )
+        assert unknown["status"] == "confirmation_invalid"
+        assert "unknown" in unknown["message"]
+        assert (
+            data(await client.call_tool("get_order", {"order_id": order["id"]}))["status"] == "open"
+        )
+
+        # the fresh token from a rejection works, once
+        again = args | {"confirmation_token": unknown["confirmation_token"]}
+        assert data(await client.call_tool("cancel_order", again))["status"] == "cancelled"
+        reused = await client.call_tool("cancel_order", again)
+        assert data(reused)["status"] == "confirmation_invalid"
