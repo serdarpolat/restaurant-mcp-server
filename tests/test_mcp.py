@@ -195,10 +195,19 @@ async def test_impossible_dates_are_refused_with_a_hint(pos_api):
         year = int(today[:4])
         old = await client.call_tool("get_void_report", {"date_from": f"{year - 2}{today[4:]}"})
         future = await client.call_tool("get_top_items", {"date_from": f"{year + 1}-01-01"})
-        bad = await client.call_tool("get_daily_summary", {"day": "dün"})
+        bad = await client.call_tool("get_daily_summary", {"day": "geçen salı"})
+        yesterday = data(await client.call_tool("get_top_items", {"date_from": "dün"}))
+        week = data(
+            await client.call_tool("get_void_report", {"date_from": "-7", "date_to": "today"})
+        )
     assert old.is_error and f"Did you mean {today}" in old.content[0].text
     assert future.is_error and today in future.content[0].text
     assert bad.is_error and "YYYY-MM-DD" in bad.content[0].text
+    # relative days need no date arithmetic from the model
+    day_before = (date.fromisoformat(today) - timedelta(days=1)).isoformat()
+    assert yesterday["period"] == {"date_from": day_before, "date_to": day_before}
+    week_ago = (date.fromisoformat(today) - timedelta(days=7)).isoformat()
+    assert week["period"] == {"date_from": week_ago, "date_to": today}
 
 
 async def test_ids_are_checked_against_the_name_the_user_said(pos_api):
@@ -299,7 +308,7 @@ async def test_order_lines_by_name_and_option_names(pos_api):
             )
         )
     assert order["table"] == "Salon 4"
-    assert order["summary"].startswith(f"OPENED order #{order['id']} (Salon 4): ")
+    assert order["summary"].startswith(f"OPENED order #{order['id']} on Salon 4: ")
     got = sorted((i["name"], i["quantity"], i["modifiers"]) for i in order["items"])
     assert got == [
         ("Adana Kebap", 1, "Acılı"),
@@ -336,36 +345,48 @@ async def test_a_remembered_id_that_does_not_match_the_name_is_refused(pos_api):
         assert result.is_error and "Büyük Boy" in text
 
 
-async def test_add_items_checks_the_order_belongs_to_the_table(pos_api):
+async def test_orders_go_to_the_named_table_whatever_order_id_was_remembered(pos_api):
+    """Seen in LM Studio: "Bahçe 3'e ... ekle" went to the previous table's order id."""
     async with Client(mcp) as client:
         order = await open_adana_order(client)  # on the first free table
         table = order["table"]
-        result, text = await call(
-            client,
-            "add_items_to_order",
-            {"order_id": order["id"] + 1000, "table_name": table, "items": [{"name": "Çay"}]},
-        )
-        assert result.is_error and f"open order is #{order['id']}" in text
-        result, text = await call(
-            client,
-            "add_items_to_order",
-            {"order_id": order["id"], "table_name": "Teras 2", "items": [{"name": "Çay"}]},
-        )
-        assert result.is_error and "Teras 2 has no open order" in text and "create_order" in text
+        # an order id from earlier in a chat does not matter for a table: the name decides
         ok = data(
             await client.call_tool(
                 "add_items_to_order",
                 {
-                    "order_id": order["id"],
+                    "order_id": order["id"] + 1000,
                     "table_name": table,
                     "items": [{"name": "Çay", "quantity": 2}],
                 },
             )
         )
-        assert any(i["name"] == "Çay" and i["quantity"] == 2 for i in ok["items"])
-        # the summary names only what this call added, so it cannot be read as a removal
-        assert ok["summary"].startswith(f"ADDED to order #{order['id']}")
+        assert ok["id"] == order["id"]
+        assert ok["summary"].startswith(f"ADDED to {table}'s open order #{order['id']}")
         assert "2 x Çay" in ok["summary"] and "Adana" not in ok["summary"]
+        # "add" to a table without an order opens one there
+        teras = data(
+            await client.call_tool(
+                "add_items_to_order", {"table_name": "Teras 2", "items": [{"name": "Su"}]}
+            )
+        )
+        assert teras["table"] == "Teras 2" and teras["summary"].startswith("OPENED order #")
+        # "open" on a table that already has an order adds to it (no second order, no error)
+        again = data(
+            await client.call_tool(
+                "create_order", {"table_name": "Teras 2", "items": [{"name": "Kola"}]}
+            )
+        )
+        assert again["id"] == teras["id"] and again["summary"].startswith("ADDED to Teras 2")
+        # get_order by table name: no order id needed for "what is Teras 2's bill"
+        bill = data(await client.call_tool("get_order", {"table_name": "teras 2"}))
+        assert bill["id"] == teras["id"] and len(bill["items"]) == 2
+        result, text = await call(
+            client,
+            "create_order",
+            {"channel": "takeaway", "table_name": "Teras 2", "items": [{"name": "Su"}]},
+        )
+        assert result.is_error and "no table" in text
 
 
 async def test_table_names_match_whole_words(pos_api):

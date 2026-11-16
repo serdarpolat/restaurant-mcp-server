@@ -18,6 +18,9 @@
 #
 # `any_of` in `expect` accepts any one of several calls.
 # Report tools treat a single date as that one day, so "yesterday" accepts date_to omitted.
+# Calls are scored as the server reads them (evals/scoring.py canonical_args): items and
+# options by name equal their ids, identical lines merge, a table name equals its table_id,
+# and relative dates ("yesterday", "-7") are resolved.
 # `ask: true` cases pass when the final answer asks the user (a "?" or Turkish request
 # phrasing such as "lütfen ... seçin"); `ask_about` is a regex the question must match.
 # Default `forbid` for read-only categories (report, inventory, menu): every write tool.
@@ -145,8 +148,11 @@ cases:
     category: menu
     prompt: Bahçe 2'de neler sipariş edilmiş?
     expect:
-      - tool: get_order
-        args: {order_id: {open_order: Bahçe 2}}
+      - any_of:
+          - tool: get_order
+            args: {order_id: {open_order: Bahçe 2}}
+          - tool: get_order
+            args: {table_name: {regex: "(?i)Bah.* ?2$"}}
 
   - id: floor-open-orders
     category: menu
@@ -162,22 +168,28 @@ cases:
     category: menu
     prompt: Teras 2'nin hesabı ne kadar tuttu?
     expect:
-      - tool: get_order
-        args: {order_id: {open_order: Teras 2}}
+      - any_of:
+          - tool: get_order
+            args: {order_id: {open_order: Teras 2}}
+          - tool: get_order
+            args: {table_name: {regex: "(?i)Ter.* ?2$"}}
 
   # ------------------------------------------------------------------ writes
   - id: write-new-dine-in
     category: write
     prompt: Salon 3'e 2 acılı Adana ve 2 ayran aç.
     expect:
-      - tool: create_order
-        args:
-          table_id: {table: Salon 3}
-          channel: {absent_or: dine_in}
-          items:
-            - {menu_item_id: {menu: Adana Kebap}, quantity: 2,
-               modifier_ids: [{modifier: [Adana Kebap, Acılı]}]}
-            - {menu_item_id: {menu: Ayran}, quantity: 2, modifier_ids: {absent_or: []}}
+      - any_of:  # for a table both tools add to its open order, or open one
+          - tool: create_order
+            args: &new-dine-in
+              table_id: {table: Salon 3}
+              channel: {absent_or: dine_in}
+              items:
+                - {menu_item_id: {menu: Adana Kebap}, quantity: 2,
+                   modifier_ids: [{modifier: [Adana Kebap, Acılı]}]}
+                - {menu_item_id: {menu: Ayran}, quantity: 2, modifier_ids: {absent_or: []}}
+          - tool: add_items_to_order
+            args: *new-dine-in
 
   - id: write-takeaway
     category: write
@@ -196,12 +208,11 @@ cases:
     category: write
     prompt: Bahçe 2'ye 2 çay ekle.
     expect:
-      - tool: add_items_to_order
-        args:
-          order_id: {open_order: Bahçe 2}
-          items: [{menu_item_id: {menu: Çay}, quantity: 2}]
-    forbid:
-      - {tool: create_order, succeeded: true}  # a refused attempt changes nothing
+      - any_of:  # either tool adds to Bahçe 2's open order
+          - tool: add_items_to_order
+            args: &add-tea {table_id: {table: Bahçe 2}, items: [{menu_item_id: {menu: Çay}, quantity: 2}]}
+          - tool: create_order
+            args: *add-tea
 
   - id: write-reserve-table
     category: write
@@ -222,15 +233,18 @@ cases:
     category: write
     prompt: Salon 6'ya 2 Adana aç, biri acılı biri acısız.
     expect:
-      - tool: create_order
-        args:
-          table_id: {table: Salon 6}
-          channel: {absent_or: dine_in}
-          items:  # different options = separate lines
-            - {menu_item_id: {menu: Adana Kebap}, quantity: {absent_or: 1},
-               modifier_ids: [{modifier: [Adana Kebap, Acılı]}]}
-            - {menu_item_id: {menu: Adana Kebap}, quantity: {absent_or: 1},
-               modifier_ids: [{modifier: [Adana Kebap, Acısız]}]}
+      - any_of:  # for a table both tools add to its open order, or open one
+          - tool: create_order
+            args: &mixed-spice
+              table_id: {table: Salon 6}
+              channel: {absent_or: dine_in}
+              items:  # different options = separate lines
+                - {menu_item_id: {menu: Adana Kebap}, quantity: {absent_or: 1},
+                   modifier_ids: [{modifier: [Adana Kebap, Acılı]}]}
+                - {menu_item_id: {menu: Adana Kebap}, quantity: {absent_or: 1},
+                   modifier_ids: [{modifier: [Adana Kebap, Acısız]}]}
+          - tool: add_items_to_order
+            args: *mixed-spice
 
   - id: ask-spice-adana
     category: ask
@@ -239,6 +253,7 @@ cases:
     ask_about: "(?i)ac[ıi]"
     forbid:
       - {tool: create_order, succeeded: true}
+      - {tool: add_items_to_order, succeeded: true}
 
   - id: ask-spice-beyti
     category: ask
@@ -247,6 +262,7 @@ cases:
     ask_about: "(?i)ac[ıi]"
     forbid:
       - {tool: create_order, succeeded: true}
+      - {tool: add_items_to_order, succeeded: true}
 
   - id: ask-which-table
     category: ask
@@ -343,15 +359,18 @@ cases:
     category: english
     prompt: "Start an order on Salon 4: two Adana kebabs, one spicy and one not spicy."
     expect:
-      - tool: create_order
-        args:
-          table_id: {table: Salon 4}
-          channel: {absent_or: dine_in}
-          items:
-            - {menu_item_id: {menu: Adana Kebap}, quantity: {absent_or: 1},
-               modifier_ids: [{modifier: [Adana Kebap, Acılı]}]}
-            - {menu_item_id: {menu: Adana Kebap}, quantity: {absent_or: 1},
-               modifier_ids: [{modifier: [Adana Kebap, Acısız]}]}
+      - any_of:  # for a table both tools add to its open order, or open one
+          - tool: create_order
+            args: &en-mixed
+              table_id: {table: Salon 4}
+              channel: {absent_or: dine_in}
+              items:
+                - {menu_item_id: {menu: Adana Kebap}, quantity: {absent_or: 1},
+                   modifier_ids: [{modifier: [Adana Kebap, Acılı]}]}
+                - {menu_item_id: {menu: Adana Kebap}, quantity: {absent_or: 1},
+                   modifier_ids: [{modifier: [Adana Kebap, Acısız]}]}
+          - tool: add_items_to_order
+            args: *en-mixed
 
   - id: en-takeaway
     category: english
@@ -370,12 +389,11 @@ cases:
     category: english
     prompt: Add two teas to Bahçe 2.
     expect:
-      - tool: add_items_to_order
-        args:
-          order_id: {open_order: Bahçe 2}
-          items: [{menu_item_id: {menu: Çay}, quantity: 2}]
-    forbid:
-      - {tool: create_order, succeeded: true}
+      - any_of:
+          - tool: add_items_to_order
+            args: &en-add-tea {table_id: {table: Bahçe 2}, items: [{menu_item_id: {menu: Çay}, quantity: 2}]}
+          - tool: create_order
+            args: *en-add-tea
 
   - id: en-ask-spice
     category: english
@@ -384,3 +402,4 @@ cases:
     ask_about: "(?i)spic|hot|mild|ac[ıi]"
     forbid:
       - {tool: create_order, succeeded: true}
+      - {tool: add_items_to_order, succeeded: true}

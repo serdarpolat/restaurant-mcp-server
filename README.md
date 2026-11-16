@@ -151,7 +151,7 @@ authentication.
 git clone https://github.com/serdarpolat/restaurant-mcp-server
 cd restaurant-mcp-server
 uv sync --extra dev
-uv run pytest                 # 80 tests
+uv run pytest                 # 81 tests
 uv run restaurant-pos-api     # http://127.0.0.1:8000/docs
 uv run restaurant-pos-mcp     # MCP server over stdio
 ```
@@ -368,8 +368,12 @@ v5 makes those mistakes harder to make and impossible to read as success:
 - **Order lines carry the item's name** (`{"name": "Lahmacun", "options": ["Acısız"]}`).
   The name is checked against `menu_item_id`, or finds the item on its own. Options can be
   given by name, also in English (`"not spicy"`, `"large"`).
-- **`add_items_to_order` takes the table's name** and refuses an order that is not that
-  table's open order, naming the right order id or saying to use `create_order`.
+- **Orders go to the table the user named.** `create_order` and `add_items_to_order` take
+  the table's name and do the same thing: add to its open order, or open one. An order id
+  remembered from earlier in a chat (the model kept sending Salon 6's order for "Bahçe 3'e
+  ekle") no longer decides where items go. `get_order` also takes a table name.
+- **Relative dates.** Report tools take `yesterday`, `today` or `-7`; the model kept
+  writing 2024 for "yesterday" in 2026, even after the hint.
 - **Failed writes start with `NOT SAVED.`**, successful ones with a one-line summary
   (`OPENED order #9426 (Bahçe 2): 3 x Lahmacun (Acısız)...`, `ADDED to order #9425 ...`),
   and the instructions say to report an order only with the id a tool returned. (A retest

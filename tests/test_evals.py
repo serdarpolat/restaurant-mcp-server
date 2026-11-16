@@ -413,3 +413,45 @@ async def test_repeat_reports_per_run_totals_and_unstable_cases(resolver, tmp_pa
     md = summary_markdown("scripted", results)
     assert "Passed per run: 1, 0 of 1" in md
     assert "failed 1/2" in md
+
+
+def test_calls_are_scored_as_the_server_reads_them(resolver):
+    """v5 run: "2 acılı Adana" sent as two identical lines, "dün" as a word, a table by name."""
+    adana = resolver.resolve("menu", "Adana Kebap")
+    spicy = resolver.resolve("modifier", ["Adana Kebap", "Acılı"])
+    split = {"menu_item_id": adana, "quantity": 1, "modifier_ids": [spicy]}
+    traj = Trajectory(
+        calls=[
+            ToolCall(
+                "create_order",
+                {
+                    "table_id": resolver.resolve("table", "Salon 3"),
+                    "items": [split, split, {"name": "Ayran", "quantity": 2}],
+                },
+            )
+        ],
+        final_text="Sipariş açıldı.",
+    )
+    assert score(CASES["write-new-dine-in"], traj, resolver).passed
+    by_name = Trajectory(
+        calls=[
+            ToolCall(
+                "add_items_to_order",
+                {
+                    "table_name": "salon 3",
+                    "items": [
+                        {"name": "adana", "quantity": 2, "options": ["spicy"]},
+                        {"name": "ayran", "quantity": 2},
+                    ],
+                },
+            )
+        ],
+        final_text="Eklendi.",
+    )
+    assert score(CASES["write-new-dine-in"], by_name, resolver).passed
+    words = Trajectory(
+        calls=[ToolCall("get_top_items", {"date_from": "dün", "limit": 5})], final_text="İşte."
+    )
+    assert score(CASES["report-top5-yesterday"], words, resolver).passed
+    bill = Trajectory(calls=[ToolCall("get_order", {"table_name": "Teras 2"})], final_text="x")
+    assert score(CASES["floor-bill-total"], bill, resolver).passed

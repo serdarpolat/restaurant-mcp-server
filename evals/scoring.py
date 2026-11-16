@@ -5,7 +5,8 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from evals.world import Resolver
-from pos_mcp.lines import LineError, resolve_line, same_table
+from pos_api.timeutil import today
+from pos_mcp.lines import LineError, merge_lines, resolve_day, resolve_line, same_table
 
 WRITE_TOOLS = frozenset(
     {
@@ -155,22 +156,45 @@ def _alternatives(requirement: dict[str, Any]) -> list[dict[str, Any]]:
     return requirement.get("any_of", [requirement])
 
 
+DATE_ARGS = ("date_from", "date_to", "day")
+
+
 def canonical_args(tool: str, args: dict[str, Any], resolver: Resolver) -> dict[str, Any]:
-    """Order calls may name items, options and tables instead of giving ids: score what the
-    server would actually order ("Acısız" and modifier id 3 are the same call)."""
+    """Score what the server would do, not how the model spelled it.
+
+    - Order lines may name items and options instead of ids ("Acısız" = modifier id 3), and
+      identical lines are one line ("1 x Adana" twice = "2 x Adana"), as the server merges.
+    - A table may be given by name; for a table, add_items_to_order and create_order do the
+      same thing (add to its open order, or open one), so both get the table's id.
+    - Report dates may be relative ("yesterday", "-7").
+    """
+    args = dict(args)
+    if any(k in args for k in DATE_ARGS):
+        for key in DATE_ARGS:
+            if key in args:
+                args[key] = resolve_day(args[key], today())
     if tool not in {"create_order", "add_items_to_order"}:
         return args
-    args = dict(args)
     if isinstance(args.get("items"), list):
         menu, details = resolver.menu()
         items = []
-        for line in args["items"]:
-            try:
-                items.append(resolve_line(line, menu, details) if "name" in line else line)
-            except (LineError, KeyError, TypeError):
-                items.append(line)  # scored as sent: it will not match
-        args["items"] = items
-    if tool == "create_order" and args.get("table_id") is None and args.get("table_name"):
+        try:
+            for line in args["items"]:
+                if "name" in line:
+                    items.append(resolve_line(line, menu, details))
+                else:
+                    items.append(
+                        {
+                            "menu_item_id": line["menu_item_id"],
+                            "quantity": line.get("quantity", 1),
+                            "modifier_ids": list(line.get("modifier_ids") or []),
+                            "note": line.get("note", ""),
+                        }
+                    )
+            args["items"] = merge_lines(items)
+        except (LineError, KeyError, TypeError):
+            pass  # scored as sent: it will not match
+    if args.get("table_id") is None and args.get("table_name"):
         table = next(
             (t for t in resolver.tables() if same_table(args["table_name"], t["name"])), None
         )

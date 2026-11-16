@@ -6,6 +6,7 @@ A line names its item ("Lahmacun") and may carry its id and its options by name 
 (menu items as the POS API returns them), shared by the MCP server and the eval scorer.
 """
 
+from datetime import date, timedelta
 from typing import Any
 
 from pos_api.text import matches, normalize, words
@@ -138,3 +139,36 @@ def same_table(said: str, actual: str) -> bool:
         return True
     s, a = f" {' '.join(s.split())} ", f" {' '.join(a.split())} "
     return a in s
+
+
+_TODAY = {"today", "bugun", "now", "simdi", "0"}
+_YESTERDAY = {"yesterday", "dun", "-1"}
+
+
+def resolve_day(value: str | None, today: date) -> str | None:
+    """'today' / 'bugün' / 'yesterday' / 'dün' / '-7' -> YYYY-MM-DD; anything else unchanged.
+
+    Small models get the year of "yesterday" wrong (2024-11-16 in 2026); a word they cannot.
+    """
+    if value is None:
+        return None
+    key = normalize(str(value)).replace(" ", "")
+    if key in _TODAY:
+        return today.isoformat()
+    if key in _YESTERDAY:
+        return (today - timedelta(days=1)).isoformat()
+    if key.startswith("-") and key[1:].isdigit():
+        return (today - timedelta(days=int(key[1:]))).isoformat()
+    return str(value)
+
+
+def merge_lines(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Identical lines become one: '1 x Adana (Acılı)' twice = '2 x Adana (Acılı)'."""
+    merged: dict[tuple, dict[str, Any]] = {}
+    for line in lines:
+        key = (line["menu_item_id"], tuple(sorted(line["modifier_ids"])), line.get("note", ""))
+        if key in merged:
+            merged[key]["quantity"] += line["quantity"]
+        else:
+            merged[key] = dict(line)
+    return list(merged.values())
