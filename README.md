@@ -307,15 +307,17 @@ Model: Mistral Magistral Small 2509 (24B, Q4_K_M) running locally in LM Studio. 
 answers vary from run to run, so each version ran the full set several times (v2 6 times,
 the others 3 times). Counts are for the 30 Turkish cases all versions share.
 
-| | v1 | v2 | v3 | v5 | v6.1 |
-|---|---:|---:|---:|---:|---:|
-| Passed | 59/90 (66%) | 155/180 (86%) | **86/90 (96%)** | 78/90 (87%) | 84/90 (93%) |
-| Passed per run (of 30) | 19 · 20 · 20 | 26 · 27 · 27 · 26 · 26 · 23 | 28 · 29 · 29 | 25 · 27 · 26 | 26 · 30 · 28 |
-| Right tool chosen | 82% | 97% | 99% | 99% | 99% |
-| Approval-gated actions | 7/18 (39%) | 35/36 (97%) | **18/18** | 18/18 | 17/18 |
-| Orders and table changes | 7/15 (47%) | 21/30 (70%) | **15/15** | 14/15 | 13/15 |
-| Input tokens per case | 13.5k | 14.4k | 17.0k | 23.9k | 17.9k |
-| English cases (6 × 3) | | | | 16/18 | 14/18 |
+| | v1 | v2 | v3 | v5 | v6.1 | v6.2 |
+|---|---:|---:|---:|---:|---:|---:|
+| Passed | 59/90 (66%) | 155/180 (86%) | **86/90 (96%)** | 78/90 (87%) | 84/90 (93%) | 84/90 (93%) |
+| Passed per run (of 30) | 19 · 20 · 20 | 26 · 27 · 27 · 26 · 26 · 23 | 28 · 29 · 29 | 25 · 27 · 26 | 26 · 30 · 28 | 25 · 30 · 29 |
+| Right tool chosen | 82% | 97% | 99% | 99% | 99% | **100%** |
+| Approval-gated actions | 7/18 (39%) | 35/36 (97%) | **18/18** | 18/18 | 17/18 | **18/18** |
+| Orders and table changes | 7/15 (47%) | 21/30 (70%) | **15/15** | 14/15 | 13/15 | 13/15 |
+| Input tokens per case | 13.5k | 14.4k | 17.0k | 23.9k | 17.9k | 18.2k |
+| All 37 cases (incl. English, mixed options) | | | | 97/111 | 99/111 | **101/111 (91%)** |
+
+v6.2 had the first run with every one of the 37 cases passing (runs: 30, 37, 34 of 37).
 
 The model did not change; only the MCP server did. From v1 to v3 each version's worst run
 beat the previous version's best. v5 and v6 were driven by live chats rather than the eval,
@@ -402,8 +404,11 @@ let report tools take `yesterday` / `today` / `-N`, and merged identical order l
 first version used `'-7'` as the example and the model sent `-7` for "yesterday"; v6.1
 reads `'-1' is yesterday` and reports went from 13/21 to 20/21. What v6.1 still gets wrong:
 order quantities (one line of 1 where the user said 2, while the answer said 2) and once
-picking a spice level the user never gave. The fixes for those (v6.2: quantity hint) are
-not yet measured.
+picking a spice level the user never gave. v6.2 describes `quantity` ("'3 acısız lahmacun'
+= 3; one spicy and one not = two lines of 1"): mixed options are now 3/3 and all 37 cases
+pass 101/111, but the model still sometimes sends 1 where the user said 2 or 3, and still
+chooses a spice level instead of asking in 3 of 9 tries. Both are the model ignoring what
+the tools say; a larger model is the next thing to measure.
 
 A small local model can still claim success without calling a tool at all (seen once, after
 LM Studio itself rejected a 100% discount). No server can see that, so with local models,
@@ -419,7 +424,7 @@ check the order in the POS, not the chat.
 - [x] Eval results: tool-design changes measured before/after
 - [ ] Eval the preview + token approval path (clients without approval prompts)
 - [x] Measure v5 / v6 (English cases, names in order lines, table-based orders)
-- [ ] Measure v6.2
+- [x] Measure v6.2
 - [ ] More models in the comparison
 - [ ] Authentication, then a read-only connection to a real POS
 - [ ] Demo video
