@@ -255,7 +255,8 @@ Timestamps are timezone-aware (`RESTAURANT_TZ`, default `Europe/Istanbul`).
 ("Dün en çok satan 5 ürün hangileriydi?") to orders ("Salon 3'e 2 acılı Adana ve 2 ayran aç.")
 and risky actions ("Teras 2'nin siparişini iptal et; malzemeleri stoğa geri ekle."), plus
 6 English requests against the same Turkish menu ("Start an order on Salon 4: two Adana
-kebabs, one spicy and one not spicy."). The results below are from the first 30 cases.
+kebabs, one spicy and one not spicy."). The comparison below uses the 30 Turkish cases every
+version ran.
 
 Each request runs as a real agent loop: the model gets the MCP server's 20 tools, calls as
 many as it needs (look up the menu, find the table, then order), and every call is scored.
@@ -274,9 +275,10 @@ many as it needs (look up the menu, find the table, then order), and every call 
 | report | 7 | Z report, top items, hourly and channel sales, staff, voids |
 | inventory | 3 | low stock, "why is minced meat low?", one ingredient |
 | menu | 6 | prices, categories, free tables, open orders, a table's bill |
-| write | 5 | dine-in and takeaway orders, add items, reserve or free a table |
+| write | 6 | dine-in and takeaway orders, mixed options, add items, reserve or free a table |
 | ask | 3 | missing spice level, missing table |
 | approval | 6 | cancel (with and without restock), void a line, pay, discount, stock purchase |
+| english | 6 | the same kinds of requests in English, against the Turkish menu |
 
 Run it against any model with tool calling: a local one in LM Studio or Ollama (free, no key),
 or a hosted one (Anthropic, Gemini, Groq, OpenRouter; keys in `.env`):
@@ -302,20 +304,22 @@ must fail for the right reasons (`tests/test_evals.py`).
 ### Results: what better tool design buys
 
 Model: Mistral Magistral Small 2509 (24B, Q4_K_M) running locally in LM Studio. A model's
-answers vary from run to run, so each version ran the full set several times (v1 and v3 3
-times, v2 6 times), all scored with the same rules.
+answers vary from run to run, so each version ran the full set several times (v2 6 times,
+the others 3 times). Counts are for the 30 Turkish cases all versions share.
 
-| | v1 | v2 | v3 |
-|---|---:|---:|---:|
-| Passed | 59/90 (66%) | 155/180 (86%) | **86/90 (96%)** |
-| Passed per run (of 30) | 19 · 20 · 20 | 26 · 27 · 27 · 26 · 26 · 23 | 28 · 29 · 29 |
-| Right tool chosen | 82% | 97% | 99% |
-| Approval-gated actions | 7/18 (39%) | 35/36 (97%) | **18/18** |
-| Orders and table changes | 7/15 (47%) | 21/30 (70%) | **15/15** |
-| Input tokens per case | 13.5k | 14.4k | 17.0k |
+| | v1 | v2 | v3 | v5 | v6.1 |
+|---|---:|---:|---:|---:|---:|
+| Passed | 59/90 (66%) | 155/180 (86%) | **86/90 (96%)** | 78/90 (87%) | 84/90 (93%) |
+| Passed per run (of 30) | 19 · 20 · 20 | 26 · 27 · 27 · 26 · 26 · 23 | 28 · 29 · 29 | 25 · 27 · 26 | 26 · 30 · 28 |
+| Right tool chosen | 82% | 97% | 99% | 99% | 99% |
+| Approval-gated actions | 7/18 (39%) | 35/36 (97%) | **18/18** | 18/18 | 17/18 |
+| Orders and table changes | 7/15 (47%) | 21/30 (70%) | **15/15** | 14/15 | 13/15 |
+| Input tokens per case | 13.5k | 14.4k | 17.0k | 23.9k | 17.9k |
+| English cases (6 × 3) | | | | 16/18 | 14/18 |
 
-The model did not change; only the MCP server did. Each version's worst run beats the
-previous version's best. Every change was driven by a failure the eval caught.
+The model did not change; only the MCP server did. From v1 to v3 each version's worst run
+beat the previous version's best. v5 and v6 were driven by live chats rather than the eval,
+and the eval shows their cost and recovery (below).
 
 **v1 → v2: say what you mean**
 
@@ -357,7 +361,7 @@ Still failing in v3 (4 of 90): leaving out an argument on a simple read (`group_
 question without looking at the stock movements.
 Full logs of the latest 3-run batch per version: [`evals/results/`](evals/results/).
 
-**v3 → v5: what a live chat found (not yet measured)**
+**v3 → v6: what live chats found, and what the eval said about the fixes**
 
 A long English/Turkish chat in LM Studio with the same model found failures the single-turn
 evals miss: the model reused an id from earlier in the chat (Adana's id for a lahmacun),
@@ -391,6 +395,16 @@ v5 makes those mistakes harder to make and impossible to read as success:
   categories work in reports, discounts without a reason and absurd stock amounts are
   refused before the approval step.
 
+**What the eval said.** v5 fell from 96% to 87%. Its instructions had doubled (24k input
+tokens per case), and the model still wrote 2024 for "yesterday" in 2026, ignored the hint,
+and twice made up a top-5 list after both calls failed. v6 cut the instructions to a third,
+let report tools take `yesterday` / `today` / `-N`, and merged identical order lines. Its
+first version used `'-7'` as the example and the model sent `-7` for "yesterday"; v6.1
+reads `'-1' is yesterday` and reports went from 13/21 to 20/21. What v6.1 still gets wrong:
+order quantities (one line of 1 where the user said 2, while the answer said 2) and once
+picking a spice level the user never gave. The fixes for those (v6.2: quantity hint) are
+not yet measured.
+
 A small local model can still claim success without calling a tool at all (seen once, after
 LM Studio itself rejected a 100% discount). No server can see that, so with local models,
 check the order in the POS, not the chat.
@@ -404,7 +418,8 @@ check the order in the POS, not the chat.
 - [x] Eval harness: Turkish and English requests, argument-level scoring
 - [x] Eval results: tool-design changes measured before/after
 - [ ] Eval the preview + token approval path (clients without approval prompts)
-- [ ] Measure v5 (English cases, names in order lines)
+- [x] Measure v5 / v6 (English cases, names in order lines, table-based orders)
+- [ ] Measure v6.2
 - [ ] More models in the comparison
 - [ ] Authentication, then a read-only connection to a real POS
 - [ ] Demo video

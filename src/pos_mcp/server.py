@@ -133,7 +133,13 @@ class OrderLine(BaseModel):
         "menu_item_id; with no id, the item is found by this name."
     )
     menu_item_id: int | None = Field(default=None, description="Menu item id from search_menu.")
-    quantity: int = Field(default=1, ge=1, le=50)
+    quantity: int = Field(
+        default=1,
+        ge=1,
+        le=50,
+        description="How many of this item WITH THESE OPTIONS: '3 acısız lahmacun' = 3; "
+        "'2 Adana, biri acılı biri acısız' = two lines with quantity 1.",
+    )
     options: list[str] = Field(
         default_factory=list,
         description="Option names from get_menu_item, e.g. ['Acısız'] or ['Büyük Boy']. English "
