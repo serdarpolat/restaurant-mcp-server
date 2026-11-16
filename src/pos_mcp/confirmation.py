@@ -10,6 +10,12 @@ Two layers, strongest available first:
    that what runs is exactly what was previewed; asking the user in between
    relies on the model following the tool instructions.
 
+   The second call must also carry the user's own reply, word for word. A token alone
+   let a model execute after the user had said "no, don't cancel it" (seen in LM Studio):
+   a reply that refuses, or does not clearly approve, does not run the action. A model
+   could still invent a "yes"; elicitation, or the client's own tool-call approval, is
+   the hard guarantee.
+
    Pending tokens are kept in a small file, not in memory: some clients (LM Studio)
    reach the server through a new process between the preview and the approval,
    and an in-memory token would be lost. A rejected token always comes back with a
@@ -22,6 +28,7 @@ and returns `gate(...)`. The MCP SDK runs the resolver before the tool body.
 import hashlib
 import json
 import os
+import re
 import secrets
 import time
 from dataclasses import dataclass
@@ -32,6 +39,8 @@ from mcp.server.elicitation import AcceptedElicitation, ElicitationResult
 from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.resolve import Elicit
 from pydantic import BaseModel, Field
+
+from pos_api.text import normalize
 
 TOKEN_TTL_SECONDS = 300
 
@@ -110,7 +119,7 @@ def _issue(action: str, args: dict[str, Any], preview: str, why: str | None) -> 
         "confirmation_token": token,
         "message": "NOTHING HAS BEEN CHANGED YET. Show this preview to the user and ask "
         "for explicit approval. Only if they approve, call this tool again with the same "
-        "arguments plus this confirmation_token.",
+        "arguments plus this confirmation_token and user_reply = their reply, word for word.",
     }
     if why:
         response["status"] = "confirmation_invalid"
@@ -122,21 +131,62 @@ def _issue(action: str, args: dict[str, Any], preview: str, why: str | None) -> 
     return Gate(response)
 
 
+# Normalized words. A refusal anywhere wins over a yes ("evet, ama iptal etme" = no).
+_NO = re.compile(
+    r"\b(hayir|yok|etme|yapma|vazgec|dur|bekle|no|nope|dont|don't|do not|not|"
+    r"never|stop|wait|cancel that)\b"
+)
+_YES = re.compile(
+    r"\b(evet|onay\w*|tamam|olur|peki|kabul|yap|yes|yep|yeah|ok|okay|confirm\w*|"
+    r"approve\w*|sure|go ahead|do it|proceed)\b"
+)
+
+
+def approves(reply: str | None) -> bool:
+    """Does the user's own reply approve the previewed action?"""
+    text = " ".join(normalize(reply or "").split())  # "CONFIRM", "Hayır" -> "confirm", "hayir"
+    return bool(_YES.search(text)) and not _NO.search(text)
+
+
+def _not_approved(action: str, args: dict[str, Any], preview: str, reply: str | None) -> Gate:
+    if not (reply or "").strip():
+        why = (
+            "user_reply is missing: pass the user's reply to the preview, word for word, "
+            "together with the token."
+        )
+    else:
+        why = (
+            f"The user's reply ({reply.strip()[:80]!r}) does not approve this action. NOTHING "
+            "WAS CHANGED. Do not call again unless the user clearly approves; tell them it was "
+            "not done and ask what they want instead."
+        )
+    gate_ = _issue(action, args, preview, why)
+    gate_.response["status"] = "not_approved"
+    return gate_
+
+
 def _supports_elicitation(ctx: Context) -> bool:
     caps = ctx.client_capabilities
     return bool(caps and caps.elicitation)
 
 
 def gate(
-    ctx: Context, action: str, args: dict[str, Any], preview: str, token: str | None
+    ctx: Context,
+    action: str,
+    args: dict[str, Any],
+    preview: str,
+    token: str | None,
+    user_reply: str | None = None,
 ) -> Elicit[Approval] | Gate:
     if token:
         pending = _load()
         stored = pending.pop(token.strip(), None)
         _save(pending)  # a token works once, whatever the outcome
-        if stored and stored["fingerprint"] == _fingerprint(action, args):
-            return Gate()
-        return _issue(action, args, preview, _why_rejected(stored, action, args))
+        if not (stored and stored["fingerprint"] == _fingerprint(action, args)):
+            return _issue(action, args, preview, _why_rejected(stored, action, args))
+        if not approves(user_reply):
+            return _not_approved(action, args, preview, user_reply)
+        return Gate()
 
     if _supports_elicitation(ctx):
         return Elicit(f"{preview}\n\nApprove?", Approval)

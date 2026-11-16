@@ -151,7 +151,7 @@ authentication.
 git clone https://github.com/serdarpolat/restaurant-mcp-server
 cd restaurant-mcp-server
 uv sync --extra dev
-uv run pytest                 # 79 tests
+uv run pytest                 # 80 tests
 uv run restaurant-pos-api     # http://127.0.0.1:8000/docs
 uv run restaurant-pos-mcp     # MCP server over stdio
 ```
@@ -193,9 +193,12 @@ Cancelling, voiding, taking payment and changing stock never run on the model's 
    for the user.
 2. **Preview + token fallback.** Otherwise the first call changes nothing and returns the
    preview plus a short-lived token bound to the exact arguments. Only a second call with that
-   token executes, so what runs is exactly what was previewed. (In this mode, asking the user
-   in between relies on the model following the tool instructions; elicitation is the hard
-   guarantee.) Pending tokens are kept on disk, so the approval still works if the client
+   token **and the user's reply, word for word** (`user_reply`) executes, so what runs is
+   exactly what was previewed, and a reply that refuses ("Hayır, iptal etme!") or does not
+   clearly approve runs nothing. (A retest caught a small model using the token right after
+   the user said no; the reply check stops that. A model could still invent a "yes":
+   elicitation is the hard guarantee. With clients that lack it, such as LM Studio, also turn
+   on the client's own approval for tool calls.) Pending tokens are kept on disk, so the approval still works if the client
    restarts the server between the preview and the approval (seen in LM Studio). A rejected token comes back with the
    reason and a fresh preview, so the model can ask again instead of giving up.
 
@@ -371,6 +374,9 @@ v5 makes those mistakes harder to make and impossible to read as success:
   (`OPENED order #9426 (Bahçe 2): 3 x Lahmacun (Acısız)...`, `ADDED to order #9425 ...`),
   and the instructions say to report an order only with the id a tool returned. (A retest
   caught the model "removing" lahmacuns with `add_items_to_order`; the result now says ADDED.)
+- **A token needs the user's own "yes".** The model once cancelled a whole order with the
+  preview token after the user had written "Hayır, tüm siparişi iptal etme!". The approval
+  call now has to carry the user's reply word for word, and a refusal runs nothing.
 - **A missing required option means asking.** The error used to suggest splitting units by
   option, and the model split three lahmacuns into three spice levels the user never chose.
   It now says to ask the user and not choose for them.

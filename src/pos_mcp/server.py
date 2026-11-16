@@ -80,7 +80,9 @@ English or another language; menu, category, option and table names are in Turki
 - Tools that cancel, void, take payment or change stock ask the user for approval
   themselves. Call them directly with the right arguments; do not ask "are you sure?" in
   chat first. If a tool answers "confirmation_required" or "confirmation_invalid", show the
-  preview to the user and wait for their answer; then call again with the token it gave.
+  preview to the user and wait for their answer. Only if they approve, call again with the
+  token it gave AND user_reply = their reply word for word. If they say no or change their
+  mind, do not call again: say it was not done.
   Discounts are at most 50% and need a reason.
 - After a write, check that the result names what the user asked for (table, item,
   ingredient) before reporting success.
@@ -137,6 +139,13 @@ ReturnToStock = Annotated[
 ConfirmToken = Annotated[
     str | None,
     Field(description="Token from a previous 'confirmation_required' answer. Omit on first call."),
+]
+UserReply = Annotated[
+    str | None,
+    Field(
+        description="With confirmation_token only: the user's reply to the preview, copied word "
+        "for word (e.g. 'evet', 'yes, cancel it'). A reply that refuses does not run the action."
+    ),
 ]
 
 
@@ -633,6 +642,7 @@ async def approve_void(
     reason: str,
     return_to_stock: bool,
     confirmation_token: str | None,
+    user_reply: str | None,
 ) -> Elicit[Approval] | Gate:
     order = await api.get(f"/orders/{order_id}")
     _open_order(order)
@@ -652,7 +662,7 @@ async def approve_void(
         "reason": reason,
         "return_to_stock": return_to_stock,
     }
-    return gate(ctx, "void_order_item", args, preview, confirmation_token)
+    return gate(ctx, "void_order_item", args, preview, confirmation_token, user_reply)
 
 
 @mcp.tool(annotations=DESTRUCTIVE)
@@ -665,6 +675,7 @@ async def void_order_item(
     approval: Annotated[ElicitationResult[Approval], Resolve(approve_void)],
     return_to_stock: ReturnToStock = False,
     confirmation_token: ConfirmToken = None,
+    user_reply: UserReply = None,
 ) -> dict[str, Any]:
     """Void (cancel) one line of an open order. Requires user approval."""
     if (response := blocked(approval)) is not None:
@@ -681,6 +692,7 @@ async def approve_cancel(
     reason: str,
     return_to_stock: bool,
     confirmation_token: str | None,
+    user_reply: str | None,
 ) -> Elicit[Approval] | Gate:
     order = await api.get(f"/orders/{order_id}")
     _open_order(order)
@@ -689,7 +701,7 @@ async def approve_cancel(
         f"{_money(order['total'])}). Reason: {reason}."
     ) + _stock_note(return_to_stock)
     args = {"order_id": order_id, "reason": reason, "return_to_stock": return_to_stock}
-    return gate(ctx, "cancel_order", args, preview, confirmation_token)
+    return gate(ctx, "cancel_order", args, preview, confirmation_token, user_reply)
 
 
 @mcp.tool(annotations=DESTRUCTIVE)
@@ -699,6 +711,7 @@ async def cancel_order(
     approval: Annotated[ElicitationResult[Approval], Resolve(approve_cancel)],
     return_to_stock: ReturnToStock = False,
     confirmation_token: ConfirmToken = None,
+    user_reply: UserReply = None,
 ) -> dict[str, Any]:
     """Cancel a whole open order and free its table. Requires user approval."""
     if (response := blocked(approval)) is not None:
@@ -715,6 +728,7 @@ async def approve_payment(
     discount_percent: float,
     discount_reason: str | None,
     confirmation_token: str | None,
+    user_reply: str | None,
 ) -> Elicit[Approval] | Gate:
     order = await api.get(f"/orders/{order_id}")
     _open_order(order)
@@ -730,7 +744,7 @@ async def approve_payment(
         "discount_percent": discount_percent,
         "discount_reason": discount_reason,
     }
-    return gate(ctx, "pay_order", args, preview, confirmation_token)
+    return gate(ctx, "pay_order", args, preview, confirmation_token, user_reply)
 
 
 @mcp.tool(annotations=DESTRUCTIVE)
@@ -741,6 +755,7 @@ async def pay_order(
     discount_percent: Annotated[float, Field(ge=0, le=50)] = 0,
     discount_reason: Annotated[str | None, Field(description="Required with a discount.")] = None,
     confirmation_token: ConfirmToken = None,
+    user_reply: UserReply = None,
 ) -> dict[str, Any]:
     """Take payment for an open order and close it (frees the table). Requires user approval."""
     if (response := blocked(approval)) is not None:
@@ -762,6 +777,7 @@ async def approve_purchase(
     quantity: float,
     note: str,
     confirmation_token: str | None,
+    user_reply: str | None,
 ) -> Elicit[Approval] | Gate:
     ingredient = await _checked_ingredient(ingredient_id, ingredient_name)
     limit = max(20 * ingredient["reorder_level"], 50)
@@ -775,7 +791,7 @@ async def approve_purchase(
         f"Add {_num(quantity)} {ingredient['unit']} of {ingredient['name']} to stock. Note: {note}"
     )
     args = {"ingredient_id": ingredient_id, "quantity": quantity, "note": note}
-    return gate(ctx, "record_stock_purchase", args, preview, confirmation_token)
+    return gate(ctx, "record_stock_purchase", args, preview, confirmation_token, user_reply)
 
 
 @mcp.tool(annotations=WRITE)
@@ -786,6 +802,7 @@ async def record_stock_purchase(
     approval: Annotated[ElicitationResult[Approval], Resolve(approve_purchase)],
     note: str = "Manuel alım",
     confirmation_token: ConfirmToken = None,
+    user_reply: UserReply = None,
 ) -> dict[str, Any]:
     """Record received stock for an ingredient (increases stock). Requires user approval."""
     if (response := blocked(approval)) is not None:

@@ -127,11 +127,8 @@ async def test_cancel_needs_token_and_token_is_bound_to_arguments(pos_api):
         )
 
         fresh = data(await client.call_tool("cancel_order", args))
-        done = data(
-            await client.call_tool(
-                "cancel_order", args | {"confirmation_token": fresh["confirmation_token"]}
-            )
-        )
+        approved = {"confirmation_token": fresh["confirmation_token"], "user_reply": "Evet"}
+        done = data(await client.call_tool("cancel_order", args | approved))
         assert done["status"] == "cancelled"
 
 
@@ -270,7 +267,7 @@ async def test_tokens_survive_a_server_restart_and_rejections_explain_themselves
         )
 
         # the fresh token from a rejection works, once
-        again = args | {"confirmation_token": unknown["confirmation_token"]}
+        again = args | {"confirmation_token": unknown["confirmation_token"], "user_reply": "yes"}
         assert data(await client.call_tool("cancel_order", again))["status"] == "cancelled"
         reused = await client.call_tool("cancel_order", again)
         # a used token on a now-cancelled order: refused before any new preview
@@ -433,3 +430,40 @@ async def test_english_category_in_reports(pos_api):
         args = {"category": "drinks", "date_from": yesterday}
         top = data(await client.call_tool("get_top_items", args))
         assert top["items"] and {i["category"] for i in top["items"]} == {"İçecekler"}
+
+
+async def test_a_token_does_not_run_the_action_when_the_user_said_no(pos_api):
+    """Seen in LM Studio: "Hayır, tüm siparişi iptal etme!" and the model used the token."""
+    async with Client(mcp) as client:
+        order = await open_adana_order(client)
+        args = {"order_id": order["id"], "reason": "Yanlış masa"}
+
+        async def status():
+            return data(await client.call_tool("get_order", {"order_id": order["id"]}))["status"]
+
+        for reply in ("Hayır, tüm siparişi iptal etme!", "wait", None, "hmm"):
+            token = data(await client.call_tool("cancel_order", args))["confirmation_token"]
+            sent = args | {"confirmation_token": token}
+            if reply is not None:
+                sent["user_reply"] = reply
+            answer = data(await client.call_tool("cancel_order", sent))
+            assert answer["status"] == "not_approved", reply
+            assert await status() == "open"
+        assert (
+            "user_reply is missing"
+            in data(
+                await client.call_tool(
+                    "cancel_order",
+                    args
+                    | {
+                        "confirmation_token": data(await client.call_tool("cancel_order", args))[
+                            "confirmation_token"
+                        ]
+                    },
+                )
+            )["message"]
+        )
+
+        token = data(await client.call_tool("cancel_order", args))["confirmation_token"]
+        done = args | {"confirmation_token": token, "user_reply": "CONFIRM"}
+        assert data(await client.call_tool("cancel_order", done))["status"] == "cancelled"
