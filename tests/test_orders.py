@@ -237,3 +237,13 @@ def test_void_can_return_one_line_to_stock(client, session):
 def test_seeded_count_ingredients_have_whole_stock(session):
     for ing in session.exec(select(Ingredient).where(Ingredient.unit == "adet")).all():
         assert ing.stock_qty == ing.stock_qty.to_integral_value(), ing.name
+
+
+def test_missing_required_option_says_ask_the_user(client):
+    adana = client.get("/menu/items", params={"search": "adana"}).json()[0]
+    r = client.post(
+        "/orders",
+        json={"channel": "takeaway", "items": [{"menu_item_id": adana["id"], "quantity": 3}]},
+    )
+    assert r.status_code == 422
+    assert "do not choose for them" in r.json()["detail"]

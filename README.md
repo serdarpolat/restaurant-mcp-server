@@ -151,7 +151,7 @@ authentication.
 git clone https://github.com/serdarpolat/restaurant-mcp-server
 cd restaurant-mcp-server
 uv sync --extra dev
-uv run pytest                 # 78 tests
+uv run pytest                 # 79 tests
 uv run restaurant-pos-api     # http://127.0.0.1:8000/docs
 uv run restaurant-pos-mcp     # MCP server over stdio
 ```
@@ -367,8 +367,13 @@ v5 makes those mistakes harder to make and impossible to read as success:
   given by name, also in English (`"not spicy"`, `"large"`).
 - **`add_items_to_order` takes the table's name** and refuses an order that is not that
   table's open order, naming the right order id or saying to use `create_order`.
-- **Failed writes start with `NOT SAVED.`**, and the instructions say to report an order
-  only with the id a tool returned.
+- **Failed writes start with `NOT SAVED.`**, successful ones with a one-line summary
+  (`OPENED order #9426 (Bahçe 2): 3 x Lahmacun (Acısız)...`, `ADDED to order #9425 ...`),
+  and the instructions say to report an order only with the id a tool returned. (A retest
+  caught the model "removing" lahmacuns with `add_items_to_order`; the result now says ADDED.)
+- **A missing required option means asking.** The error used to suggest splitting units by
+  option, and the model split three lahmacuns into three spice levels the user never chose.
+  It now says to ask the user and not choose for them.
 - **Approval previews only for possible actions.** Cancelling a paid order or voiding a line
   that is not on the order fails before the user is asked. Void previews show the options
   (`Void 1 x Adana Kebap (Acılı)`).

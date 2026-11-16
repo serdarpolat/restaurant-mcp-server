@@ -31,7 +31,7 @@ You are connected to the POS of a Turkish kebab restaurant. Users may write in T
 English or another language; menu, category, option and table names are in Turkish.
 
 - Reply in the language of the user's LATEST message, even if earlier messages were in
-  another language.
+  another language: a Turkish message gets a Turkish answer.
 - Currency is Turkish Lira (TRY). All dates and times are restaurant local time.
 - Call get_current_time before resolving relative dates such as "yesterday" or "last week",
   and always pass the dates: report tools default to TODAY when no date is given.
@@ -62,7 +62,13 @@ English or another language; menu, category, option and table names are in Turki
   about optional groups (min_select 0). Do not pick a required option for the user.
   Spice levels: Acılı = spicy/hot, Az Acılı = mild/medium, Acısız = not spicy.
 - Different options for units of the same item go on separate order lines: "2 Adana, one
-  spicy, one not" = two lines, each quantity 1, each with its own option.
+  spicy, one not" = two lines, each quantity 1, each with its own option. Never split units
+  into options the user did not say.
+- "Add X to <table>" when that table has no open order = create_order on THAT table. Never
+  put items on another table's order. add_items_to_order only ADDS; to remove or cancel a
+  line use void_order_item (or cancel_order for the whole order).
+- Never change an amount, discount, reason or option the user gave, and never invent one.
+  If what they asked is not allowed (e.g. a discount over 50%), say so and ask what to do.
 - Menu category names are Turkish (e.g. "Çorbalar", "Kebaplar"); English names also work.
 - Errors: a result that starts with "NOT SAVED" or any error means nothing changed. Read it:
   it says what was wrong and usually how to fix it. Fix the call and try again yourself,
@@ -510,7 +516,8 @@ async def create_order(
         else:
             await _checked_table(table_id, table_name)
     lines = await _lines(items)
-    return await api.post("/orders", {"channel": channel, "table_id": table_id, "items": lines})
+    order = await api.post("/orders", {"channel": channel, "table_id": table_id, "items": lines})
+    return {"summary": f"OPENED order #{order['id']} ({_where(order)}): " + _added(order), **order}
 
 
 async def _checked_order(order_id: int, table_name: str) -> dict[str, Any]:
@@ -560,12 +567,20 @@ async def add_items_to_order(
     ],
     items: Items,
 ) -> dict[str, Any]:
-    """Add items to a table's OPEN order (order_id = list_tables.open_order_id).
+    """ADD items to a table's OPEN order (order_id = list_tables.open_order_id).
 
-    A table without an open order needs create_order instead.
+    Only adds. To remove or cancel a line use void_order_item. A table without an open order
+    needs create_order instead.
     """
     await _checked_order(order_id, table_name)
-    return await api.post(f"/orders/{order_id}/items", {"items": await _lines(items)})
+    before = {i["id"] for i in (await api.get(f"/orders/{order_id}"))["items"]}
+    order = await api.post(f"/orders/{order_id}/items", {"items": await _lines(items)})
+    new = [i for i in order["items"] if i["id"] not in before]
+    return {
+        "summary": f"ADDED to order #{order_id} ({_where(order)}): "
+        + _added({**order, "items": new}),
+        **order,
+    }
 
 
 @mcp.tool(annotations=WRITE)
@@ -586,6 +601,12 @@ async def set_table_status(
 # Each tool has a resolver that runs first: it builds a human-readable preview
 # and asks for approval (see confirmation.py). The tool body only runs if approved.
 # --------------------------------------------------------------------------- #
+
+
+def _added(order: dict[str, Any]) -> str:
+    """'1 x Lahmacun (Acısız), 2 x Çay. Order total 1,920.00 TRY.' for the result summary."""
+    lines = ", ".join(_describe(i) for i in order["items"])
+    return f"{lines}. Order total {_money(order['total'])}."
 
 
 def _open_order(order: dict[str, Any]) -> None:

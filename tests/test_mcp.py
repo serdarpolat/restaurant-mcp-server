@@ -302,6 +302,7 @@ async def test_order_lines_by_name_and_option_names(pos_api):
             )
         )
     assert order["table"] == "Salon 4"
+    assert order["summary"].startswith(f"OPENED order #{order['id']} (Salon 4): ")
     got = sorted((i["name"], i["quantity"], i["modifiers"]) for i in order["items"])
     assert got == [
         ("Adana Kebap", 1, "Acılı"),
@@ -365,6 +366,9 @@ async def test_add_items_checks_the_order_belongs_to_the_table(pos_api):
             )
         )
         assert any(i["name"] == "Çay" and i["quantity"] == 2 for i in ok["items"])
+        # the summary names only what this call added, so it cannot be read as a removal
+        assert ok["summary"].startswith(f"ADDED to order #{order['id']}")
+        assert "2 x Çay" in ok["summary"] and "Adana" not in ok["summary"]
 
 
 async def test_table_names_match_whole_words(pos_api):
@@ -389,7 +393,10 @@ async def test_table_names_match_whole_words(pos_api):
 async def test_impossible_actions_fail_before_the_approval_step(pos_api):
     async with Client(mcp) as client:
         order = await open_adana_order(client)
-        paid = data(await client.call_tool("list_orders", {"status": "paid", "limit": 1}))[0]
+        today = data(await client.call_tool("get_current_time", {}))["date"]
+        week_ago = (date.fromisoformat(today) - timedelta(days=6)).isoformat()
+        paid_args = {"status": "paid", "limit": 1, "date_from": week_ago, "date_to": today}
+        paid = data(await client.call_tool("list_orders", paid_args))[0]  # any time of day
         result, text = await call(client, "cancel_order", {"order_id": paid["id"], "reason": "x"})
         assert result.is_error and "is paid" in text
         result, text = await call(

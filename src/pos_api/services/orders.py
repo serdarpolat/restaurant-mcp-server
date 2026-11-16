@@ -83,8 +83,11 @@ def _build_line(session: Session, data: OrderItemCreate) -> tuple[OrderItem, lis
                     f"options, send separate lines, e.g. 1 x {item.name} with "
                     f"'{picked[0].name}' and 1 x {item.name} with '{picked[1].name}'."
                 )
-            elif data.quantity > 1:
-                message += " If the units need different choices, send one line per choice."
+            else:  # a required choice is missing: the user has to make it
+                message += (
+                    " Ask the user which one they want; do not choose for them. If they want "
+                    "different choices for different units, send one line per choice."
+                )
             raise Invalid(message)
 
     unit_price = item.price + sum((m.price_delta for m in chosen), Decimal(0))
