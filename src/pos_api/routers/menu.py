@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Query
 from sqlmodel import select
@@ -7,7 +7,7 @@ from pos_api.db.models import Category, MenuItem
 from pos_api.deps import SessionDep
 from pos_api.errors import Invalid, NotFound
 from pos_api.schemas import CategoryRead, MenuItemDetail, MenuItemRead
-from pos_api.text import matches
+from pos_api.text import match_count, matches, query_words
 
 router = APIRouter(prefix="/menu", tags=["menu"])
 
@@ -40,23 +40,36 @@ def list_categories(session: SessionDep):
 @router.get("/items", response_model=list[MenuItemRead])
 def list_items(
     session: SessionDep,
-    search: Annotated[str | None, Query(description="Turkish-aware, accent-insensitive")] = None,
+    search: Annotated[
+        str | None,
+        Query(description="Turkish or English words, accent- and typo-tolerant ('adana kebab')"),
+    ] = None,
     category: Annotated[str | None, Query(description="Category name")] = None,
+    match: Annotated[
+        Literal["all", "any"], Query(description="Items matching all search words, or any")
+    ] = "all",
     active_only: bool = True,
 ):
     if category:
         check_category(session, category)
     items = session.exec(select(MenuItem).order_by(MenuItem.category_id, MenuItem.id)).all()
-    out = []
+    needed = len(query_words(search)) if search else 0
+    found = []
     for item in items:
         if active_only and not item.is_active:
             continue
         if category and not matches(category, item.category.name):
             continue
-        if search and not matches(search, item.name, item.description, item.category.name):
-            continue
-        out.append(_item_read(item))
-    return out
+        rank = (0, 0)
+        if search:
+            hits = match_count(search, item.name, item.description, item.category.name)
+            if hits == 0 or (match == "all" and hits < needed):
+                continue
+            # Best first: more words matched, then words matched in the item's own name.
+            rank = (-hits, -match_count(search, item.name))
+        found.append((rank, item))
+    found.sort(key=lambda pair: pair[0])  # stable: menu order within a rank
+    return [_item_read(item) for _, item in found]
 
 
 @router.get("/items/{item_id}", response_model=MenuItemDetail)

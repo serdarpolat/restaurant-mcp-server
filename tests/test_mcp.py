@@ -69,6 +69,17 @@ async def test_search_and_reports(pos_api):
         assert "net_sales" in summary
 
 
+async def test_search_menu_falls_back_to_closest_items_with_a_note(pos_api):
+    async with Client(mcp) as client:
+        exact = data(await client.call_tool("search_menu", {"query": "adana kebab"}))
+        assert exact[0]["name"] == "Adana Kebap"
+        close = data(await client.call_tool("search_menu", {"query": "adana dürüm"}))
+        assert close["items"][0]["name"] == "Adana Kebap"
+        assert "ask the user" in close["note"]
+        none = data(await client.call_tool("search_menu", {"query": "sushi"}))
+        assert none["items"] == [] and "one key word" in none["note"]
+
+
 async def test_api_errors_reach_the_model_with_recovery_hints(pos_api):
     async with Client(mcp) as client:
         adana = data(await client.call_tool("search_menu", {"query": "adana"}))[0]

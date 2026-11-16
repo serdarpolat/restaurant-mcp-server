@@ -87,6 +87,25 @@ GOOD: dict[str, Plan] = {
         ],
         "Sipariş açıldı.",
     ),
+    "en-new-dine-in-mixed": lambda x: (
+        [
+            ("search_menu", {"query": "adana kebab"}),
+            (
+                "create_order",
+                {
+                    "table_id": r(x, "table", "Salon 4"),
+                    "items": [
+                        {
+                            "menu_item_id": r(x, "menu", "Adana Kebap"),
+                            "modifier_ids": [r(x, "modifier", ["Adana Kebap", spice])],
+                        }
+                        for spice in ("Acısız", "Acılı")
+                    ],
+                },
+            ),
+        ],
+        "Order opened on Salon 4.",
+    ),
     "approve-cancel-restock": lambda x: (
         [
             (
@@ -107,6 +126,28 @@ GOOD: dict[str, Plan] = {
 }
 
 BAD: dict[str, Plan] = {
+    # both spice levels on one line of 2: refused by the POS, so no order is opened
+    "en-new-dine-in-mixed": lambda x: (
+        [
+            (
+                "create_order",
+                {
+                    "table_id": r(x, "table", "Salon 4"),
+                    "items": [
+                        {
+                            "menu_item_id": r(x, "menu", "Adana Kebap"),
+                            "quantity": 2,
+                            "modifier_ids": [
+                                r(x, "modifier", ["Adana Kebap", "Acılı"]),
+                                r(x, "modifier", ["Adana Kebap", "Acısız"]),
+                            ],
+                        }
+                    ],
+                },
+            )
+        ],
+        "Could you specify the spice level for each kebab?",
+    ),
     # wrong date range
     "report-top5-yesterday": lambda x: (
         [("get_top_items", {"date_from": r(x, "date", 0), "limit": 5})],
@@ -168,7 +209,15 @@ def test_cases_file_is_well_formed():
     ids = [c["id"] for c in SPEC["cases"]]
     assert len(ids) == len(set(ids)) >= 25
     for case in SPEC["cases"]:
-        assert case["category"] in {"report", "inventory", "menu", "write", "ask", "approval"}
+        assert case["category"] in {
+            "report",
+            "inventory",
+            "menu",
+            "write",
+            "ask",
+            "approval",
+            "english",
+        }
         assert case.get("expect") or case.get("ask"), case["id"]
 
 
@@ -207,7 +256,7 @@ async def test_wrong_agent_fails_for_the_right_reasons(resolver, tmp_path):
     assert results["report-top5-yesterday"].tool_ok  # right tool, wrong arguments
 
     md = summary_markdown("scripted", list(results.values()))
-    assert "| **total** | **4** | **0/4 (0%)** |" in md
+    assert "| **total** | **5** | **0/5 (0%)** |" in md
 
 
 def test_matchers(resolver):

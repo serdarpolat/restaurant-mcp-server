@@ -26,7 +26,8 @@ from pos_mcp.confirmation import Approval, Gate, blocked, gate
 RESTAURANT_TZ = ZoneInfo(os.getenv("RESTAURANT_TZ", "Europe/Istanbul"))
 
 INSTRUCTIONS = """\
-You are connected to the POS of a Turkish kebab restaurant.
+You are connected to the POS of a Turkish kebab restaurant. Users may write in Turkish,
+English or another language; menu, category, option and table names are in Turkish.
 
 - Currency is Turkish Lira (TRY). All dates and times are restaurant local time.
 - Call get_current_time before resolving relative dates such as "yesterday" or "last week",
@@ -39,13 +40,27 @@ You are connected to the POS of a Turkish kebab restaurant.
   ("Teras 1") is not its id, a table id is not an order id, and a menu item id is never an
   ingredient id. Tools that take a table or ingredient id also take its name and check that
   the two match.
-- "Paket", "paket servis" or "gel al" = channel takeaway; "kurye", "eve" = delivery. Neither
-  needs a table, so do not ask for one.
+- search_menu understands Turkish and English dish words ("adana kebab" finds "Adana
+  Kebap"). For other languages, search with the dish's Turkish or English name. If it
+  returns a note instead of a clear match, show the closest items and ask which one; if it
+  finds nothing, retry with one key word before asking the user.
+- Tables: when the user names a table, call list_tables without a status filter, so you see
+  that table even if it is reserved or occupied, and tell the user its status. A reserved
+  table can still get an order if the user asks for it. An occupied table already has an
+  order: add to it (add_items_to_order with open_order_id).
+- "Paket", "paket servis", "gel al" or "takeaway" = channel takeaway; "kurye", "eve" or
+  "delivery" = delivery. Neither needs a table, so do not ask for one.
 - Options: if the user already named an option in their own words ("acılı Adana",
-  "3 acısız lahmacun", "büyük ayran"), use that option's id. Ask only for REQUIRED option
-  groups (min_select >= 1) the user did not mention; never ask about optional groups
-  (min_select 0). Do not pick a required option for the user.
+  "3 acısız lahmacun", "büyük ayran", "spicy", "not spicy", "large"), use that option's id.
+  Spice levels: Acılı = spicy/hot, Az Acılı = mild/medium, Acısız = not spicy/no spice.
+  Ask only for REQUIRED option groups (min_select >= 1) the user did not mention; never ask
+  about optional groups (min_select 0). Do not pick a required option for the user.
+- Different options for units of the same item go on separate order lines: "2 Adana, one
+  spicy, one not" = two lines, each quantity 1, each with its own spice option id.
 - Menu category names are Turkish (e.g. "Çorbalar", "Kebaplar").
+- If a tool returns an error, read it: it says what was wrong and usually how to fix it.
+  Fix the call and try again yourself. Ask the user only for information they have not
+  given yet; never ask them again for something they already told you.
 - Tools that cancel, void, take payment or change stock ask the user for approval
   themselves. Call them directly with the right arguments; do not ask "are you sure?" in
   chat first. If a tool answers "confirmation_required" or "confirmation_invalid", show the
@@ -53,7 +68,8 @@ You are connected to the POS of a Turkish kebab restaurant.
 - After a write, check that the result names what the user asked for (table, item,
   ingredient) before reporting success.
 - Report numbers exactly as returned by the tools; do not estimate.
-- Answer in the user's language.
+- Answer in the user's language. When you name a Turkish item or option, you may add a
+  short translation for a non-Turkish speaker ("Acısız (not spicy)").
 """
 
 mcp = MCPServer("restaurant-pos", instructions=INSTRUCTIONS)
@@ -106,10 +122,14 @@ ConfirmToken = Annotated[
 
 
 class OrderLine(BaseModel):
+    """One line = one item with one set of options. Different options = separate lines."""
+
     menu_item_id: int = Field(description="Menu item id from search_menu.")
     quantity: int = Field(default=1, ge=1, le=50)
     modifier_ids: list[int] = Field(
-        default_factory=list, description="Option ids from get_menu_item (e.g. spice level)."
+        default_factory=list,
+        description="Option ids from get_menu_item (e.g. spice level), applied to every unit "
+        "of this line. '1 acılı + 1 acısız Adana' = two lines with quantity 1 each.",
     )
     note: str = Field(default="", description="Free-text kitchen note, e.g. 'soğansız'.")
 
@@ -234,15 +254,35 @@ async def get_current_time() -> dict[str, str]:
 @mcp.tool(annotations=READ)
 async def search_menu(
     query: Annotated[
-        str | None, Field(description="Name or keyword, Turkish letters optional ('cay' = 'çay').")
+        str | None,
+        Field(
+            description="Dish words in Turkish or English, e.g. 'adana', 'lentil soup', 'çay'. "
+            "Typos and missing Turkish letters are fine."
+        ),
     ] = None,
     category: Category = None,
-) -> list[dict[str, Any]]:
-    """Find menu items (id, name, price, category). Call with no arguments for the whole menu.
+) -> list[dict[str, Any]] | dict[str, Any]:
+    """Find menu items (id, name, price, category), best match first. No arguments = whole menu.
 
-    Items with has_options=true have options; call get_menu_item before ordering them.
+    If nothing matches every word, returns the closest items with a note: ask the user which
+    one they mean. Items with has_options=true have options; call get_menu_item before ordering.
     """
-    return await api.get("/menu/items", search=query, category=category)
+    items = await api.get("/menu/items", search=query, category=category)
+    if items or not query:
+        return items
+    closest = await api.get("/menu/items", search=query, category=category, match="any")
+    if closest:
+        names = ", ".join(i["name"] for i in closest[:5])
+        note = (
+            f"No item matches all of '{query}'. Closest: {names}. If one of them is clearly "
+            "what the user meant, use it; otherwise ask the user which one."
+        )
+        return {"note": note, "items": closest}
+    return {
+        "note": f"Nothing on the menu matches '{query}'. Try one key word (e.g. 'adana'), or "
+        "call search_menu with no arguments to see the whole menu.",
+        "items": [],
+    }
 
 
 @mcp.tool(annotations=READ)
@@ -389,7 +429,8 @@ async def create_order(
 ) -> dict[str, Any]:
     """Open a new order. Dine-in needs a table without an open order.
 
-    If the table already has an open order, use add_items_to_order instead.
+    If the table already has an open order, use add_items_to_order instead. Units of the same
+    item with different options go on separate lines ("one spicy, one mild" = 2 lines).
     """
     return await api.post(
         "/orders", {"channel": channel, "table_id": table_id, "items": _lines(items)}

@@ -151,7 +151,7 @@ authentication.
 git clone https://github.com/serdarpolat/restaurant-mcp-server
 cd restaurant-mcp-server
 uv sync --extra dev
-uv run pytest                 # 58 tests
+uv run pytest                 # 72 tests
 uv run restaurant-pos-api     # http://127.0.0.1:8000/docs
 uv run restaurant-pos-mcp     # MCP server over stdio
 ```
@@ -221,7 +221,10 @@ Design choices that matter when an AI agent is the client:
   so the agent can ask the user instead of guessing.
 - **Business rules live in the API, not in the prompt.** One open order per table, no
   overselling stock, discounts need a reason, paid orders are immutable.
-- **Turkish-aware search.** `iskender` finds `İskender`, `cay` finds `Çay`.
+- **Turkish- and English-aware search.** `iskender` finds `İskender`, `cay` finds `Çay`,
+  `adana kebab` finds `Adana Kebap`, `lentil soup` finds `Mercimek Çorbası`. One typo is
+  forgiven. When nothing matches every word, the closest items come back with a note telling
+  the agent to ask the user which one they meant.
 - **Audit trail.** Every write records who did it (`X-Actor` header) in the audit log.
 - **Local time everywhere.** The DB stores UTC; reports group by the restaurant's local day.
 
@@ -244,9 +247,11 @@ Timestamps are timezone-aware (`RESTAURANT_TZ`, default `Europe/Istanbul`).
 
 ## Evals: does the model pick the right tool?
 
-`evals/` holds 30 Turkish requests a restaurant's staff would actually type, from reports
+`evals/` holds 31 Turkish requests a restaurant's staff would actually type, from reports
 ("Dün en çok satan 5 ürün hangileriydi?") to orders ("Salon 3'e 2 acılı Adana ve 2 ayran aç.")
-and risky actions ("Teras 2'nin siparişini iptal et; malzemeleri stoğa geri ekle.").
+and risky actions ("Teras 2'nin siparişini iptal et; malzemeleri stoğa geri ekle."), plus
+6 English requests against the same Turkish menu ("Start an order on Salon 4: two Adana
+kebabs, one spicy and one not spicy."). The results below are from the first 30 cases.
 
 Each request runs as a real agent loop: the model gets the MCP server's 20 tools, calls as
 many as it needs (look up the menu, find the table, then order), and every call is scored.
@@ -354,9 +359,10 @@ Full logs of the latest 3-run batch per version: [`evals/results/`](evals/result
 - [x] Mock POS API
 - [x] MCP server (read tools, write tools with confirmation)
 - [x] Tests, CI (Linux + Windows), Docker, uv
-- [x] Eval harness: 30 Turkish requests, argument-level scoring
+- [x] Eval harness: Turkish and English requests, argument-level scoring
 - [x] Eval results: tool-design changes measured before/after
 - [ ] Eval the preview + token approval path (clients without approval prompts)
+- [ ] Measure the English cases and the new search (v4)
 - [ ] More models in the comparison
 - [ ] Authentication, then a read-only connection to a real POS
 - [ ] Demo video

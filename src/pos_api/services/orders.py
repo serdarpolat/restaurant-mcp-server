@@ -72,10 +72,19 @@ def _build_line(session: Session, data: OrderItemCreate) -> tuple[OrderItem, lis
         picked = [m for m in chosen if m.group_id == group.id]
         if not group.min_select <= len(picked) <= group.max_select:
             options = ", ".join(f"{m.name} (id={m.id})" for m in group.modifiers)
-            raise Invalid(
+            message = (
                 f"'{item.name}' needs {group.min_select}-{group.max_select} choice(s) for "
                 f"'{group.name}'. Options: {options}."
             )
+            if len(picked) > group.max_select:
+                message += (
+                    " Options apply to every unit of a line. For units with different "
+                    f"options, send separate lines, e.g. 1 x {item.name} with "
+                    f"'{picked[0].name}' and 1 x {item.name} with '{picked[1].name}'."
+                )
+            elif data.quantity > 1:
+                message += " If the units need different choices, send one line per choice."
+            raise Invalid(message)
 
     unit_price = item.price + sum((m.price_delta for m in chosen), Decimal(0))
     line = OrderItem(

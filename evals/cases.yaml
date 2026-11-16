@@ -218,6 +218,20 @@ cases:
         args: {table_id: {table: Teras 1}, status: free}
 
   # ------------------------------------------- must ask instead of guessing
+  - id: write-mixed-spice
+    category: write
+    prompt: Salon 6'ya 2 Adana aç, biri acılı biri acısız.
+    expect:
+      - tool: create_order
+        args:
+          table_id: {table: Salon 6}
+          channel: {absent_or: dine_in}
+          items:  # different options = separate lines
+            - {menu_item_id: {menu: Adana Kebap}, quantity: {absent_or: 1},
+               modifier_ids: [{modifier: [Adana Kebap, Acılı]}]}
+            - {menu_item_id: {menu: Adana Kebap}, quantity: {absent_or: 1},
+               modifier_ids: [{modifier: [Adana Kebap, Acısız]}]}
+
   - id: ask-spice-adana
     category: ask
     prompt: Salon 4'e 1 Adana Kebap.
@@ -301,3 +315,72 @@ cases:
     expect:
       - tool: record_stock_purchase
         args: {ingredient_id: {ingredient: Dana Kıyma}, quantity: 10}
+
+  # ---------------------------------------------------------------- english
+  # Same restaurant, English prompts: the menu stays Turkish ("kebab" -> "Adana Kebap").
+  - id: en-top5-yesterday
+    category: english
+    prompt: What were yesterday's top 5 best-selling items?
+    expect:
+      - tool: get_top_items
+        args:
+          date_from: {date: -1}
+          date_to: {absent_or: {date: -1}}
+          limit: 5
+          sort: {absent_or: quantity}
+
+  - id: en-price-lentil-soup
+    category: english
+    prompt: How much is the lentil soup?
+    expect:
+      - any_of:
+          - tool: search_menu
+            args: {query: {regex: "(?i)lentil|mercimek"}}
+          - tool: get_menu_item
+            args: {menu_item_id: {menu: Mercimek Çorbası}}
+
+  - id: en-new-dine-in-mixed
+    category: english
+    prompt: "Start an order on Salon 4: two Adana kebabs, one spicy and one not spicy."
+    expect:
+      - tool: create_order
+        args:
+          table_id: {table: Salon 4}
+          channel: {absent_or: dine_in}
+          items:
+            - {menu_item_id: {menu: Adana Kebap}, quantity: {absent_or: 1},
+               modifier_ids: [{modifier: [Adana Kebap, Acılı]}]}
+            - {menu_item_id: {menu: Adana Kebap}, quantity: {absent_or: 1},
+               modifier_ids: [{modifier: [Adana Kebap, Acısız]}]}
+
+  - id: en-takeaway
+    category: english
+    prompt: "Takeaway: three lahmacun, not spicy, and one turnip juice."
+    expect:
+      - tool: create_order
+        args:
+          channel: takeaway
+          table_id: {absent_or: null}
+          items:
+            - {menu_item_id: {menu: Lahmacun}, quantity: 3,
+               modifier_ids: [{modifier: [Lahmacun, Acısız]}]}
+            - {menu_item_id: {menu: Şalgam}, quantity: {absent_or: 1}}
+
+  - id: en-add-tea
+    category: english
+    prompt: Add two teas to Bahçe 2.
+    expect:
+      - tool: add_items_to_order
+        args:
+          order_id: {open_order: Bahçe 2}
+          items: [{menu_item_id: {menu: Çay}, quantity: 2}]
+    forbid:
+      - {tool: create_order, succeeded: true}
+
+  - id: en-ask-spice
+    category: english
+    prompt: Open one Adana kebab on Salon 4.
+    ask: true
+    ask_about: "(?i)spic|hot|mild|ac[ıi]"
+    forbid:
+      - {tool: create_order, succeeded: true}

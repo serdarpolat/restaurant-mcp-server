@@ -30,6 +30,34 @@ def test_required_modifier_error_lists_options(client):
     assert "Acısız" in r.json()["detail"]  # options are listed so an agent can ask the user
 
 
+def test_two_options_on_one_line_suggests_separate_lines(client):
+    adana = client.get("/menu/items", params={"search": "adana"}).json()[0]
+    detail = client.get(f"/menu/items/{adana['id']}").json()
+    spice = {m["name"]: m["id"] for m in detail["modifier_groups"][0]["modifiers"]}
+    line = {"menu_item_id": adana["id"], "quantity": 2}
+    r = client.post(
+        "/orders",
+        json={
+            "channel": "takeaway",
+            "items": [{**line, "modifier_ids": [spice["Acılı"], spice["Acısız"]]}],
+        },
+    )
+    assert r.status_code == 422
+    assert "separate lines" in r.json()["detail"]
+    r = client.post(
+        "/orders",
+        json={
+            "channel": "takeaway",
+            "items": [
+                {"menu_item_id": adana["id"], "modifier_ids": [spice["Acılı"]]},
+                {"menu_item_id": adana["id"], "modifier_ids": [spice["Acısız"]]},
+            ],
+        },
+    )
+    assert r.status_code == 201, r.text
+    assert sorted(i["modifiers"] for i in r.json()["items"]) == ["Acılı", "Acısız"]
+
+
 def test_create_order_prices_occupies_table_consumes_stock_and_audits(client, session):
     kiyma_before = session.exec(select(Ingredient).where(Ingredient.name == "Dana Kıyma")).one()
     before = kiyma_before.stock_qty

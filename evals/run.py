@@ -37,7 +37,7 @@ from evals.world import Resolver, build_world, sqlite_engine
 
 EVALS_DIR = Path(__file__).parent
 CASES_FILE = EVALS_DIR / "cases.yaml"
-CATEGORY_ORDER = ["report", "inventory", "menu", "write", "ask", "approval"]
+CATEGORY_ORDER = ["report", "inventory", "menu", "write", "ask", "approval", "english"]
 
 # Errors that will fail every case the same way: stop instead of burning through the list.
 FATAL_ERRORS = {
