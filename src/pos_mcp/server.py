@@ -38,15 +38,17 @@ POS of a Turkish kebab restaurant. Menu, option and table names are Turkish; use
 write in any language.
 
 - Reply in the language of the user's latest message (Turkish message -> Turkish answer).
-- Dates: pass 'today', 'yesterday' or '-7' (7 days ago) for recent days; never compute a
-  year yourself. Money is TRY, times are local.
+- Dates: "yesterday" -> date_from='yesterday' (one date = that day only); "today" ->
+  'today'; "last 7 days" -> date_from='-7', date_to='today'. Never compute a year yourself.
+  Money is TRY, times are local.
 - Never guess or reuse ids: look them up in this turn. Tables are passed by name
   (table_name, e.g. 'Bahçe 2'), order lines by item name with options by name
   ({"name": "Lahmacun", "quantity": 3, "options": ["Acısız"]}). A table's order:
   get_order(table_name=...).
 - Ordering for a table: create_order or add_items_to_order with the table the user named.
   The server adds to that table's open order or opens one. Never use another table.
-  Takeaway ("paket", "gel al") and delivery ("kurye") have no table.
+  Takeaway ("paket", "gel al") and delivery ("kurye") have no table. If the user named no
+  table and did not say takeaway or delivery, ask which table.
 - Options: use every option the user said (spicy = Acılı, mild = Az Acılı, not spicy =
   Acısız, large = Büyük Boy). If a REQUIRED option is missing, ask; never choose for the
   user, and never ask about optional ones. Different options for units = separate lines ("1 acılı, 1 acısız").
@@ -71,8 +73,8 @@ DESTRUCTIVE = ToolAnnotations(read_only_hint=False, destructive_hint=True, open_
 Date = Annotated[
     str | None,
     Field(
-        description="'today', 'yesterday', '-7' (7 days ago) or YYYY-MM-DD. Prefer the words for "
-        "recent days. Omit both dates = today only; one date = that day."
+        description="'today', 'yesterday', '-N' (N days ago: '-1' is yesterday) or YYYY-MM-DD. "
+        "Omit both dates = today only; one date = that day only."
     ),
 ]
 OrderId = Annotated[
@@ -426,7 +428,9 @@ async def get_top_items(
     date_to: Date = None,
     sort: Literal["quantity", "revenue"] = "quantity",
     category: Category = None,
-    limit: Annotated[int, Field(ge=1, le=50)] = 10,
+    limit: Annotated[
+        int, Field(ge=1, le=50, description="How many the user asked for: 'top 5' = 5.")
+    ] = 10,
 ) -> dict[str, Any]:
     """Best-selling menu items in a date range, by quantity or revenue."""
     date_from, date_to = _dates(date_from, date_to)
