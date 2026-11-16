@@ -15,6 +15,12 @@ Ask your AI assistant things like:
 - "Add 2 Adana kebabs and 2 ayran to a free table." (it asks for the spice level)
 - "Cancel that order." (it asks *you* to approve first)
 
+<p align="center">
+  <img src="docs/demo.gif" alt="Demo: ordering and cancelling with a local model in LM Studio" width="600">
+  <br>
+  <sub>Running fully locally: LM Studio + magistral-small-2509, sped up.</sub>
+</p>
+
 > [!WARNING]
 > **Work in progress: demo data only.** This project runs on generated data for a fictional
 > restaurant. It is not connected to any real POS system, the API has no authentication, and
@@ -427,7 +433,7 @@ check the order in the POS, not the chat.
 - [x] Measure v6.2
 - [ ] More models in the comparison
 - [ ] Authentication, then a read-only connection to a real POS
-- [ ] Demo video
+- [x] Demo video
 
 ## Follow the progress
 
