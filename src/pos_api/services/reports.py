@@ -94,7 +94,7 @@ def top_items(
     date_to: date,
     sort: TopItemsSort,
     limit: int,
-    category: str | None = None,
+    categories: list[str] | None = None,
 ) -> list[TopItemRow]:
     start, end = day_range(date_from, date_to)
     qty = func.sum(OrderItem.quantity)
@@ -114,8 +114,8 @@ def top_items(
         .order_by((qty if sort == TopItemsSort.quantity else revenue).desc())
         .limit(limit)
     )
-    if category:
-        stmt = stmt.where(Category.name == category)
+    if categories:  # exact names, already resolved from what the user typed ("drinks")
+        stmt = stmt.where(Category.name.in_(categories))
     return [
         TopItemRow(
             menu_item_id=i,

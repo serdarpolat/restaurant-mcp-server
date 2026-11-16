@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from evals.world import Resolver
+from pos_mcp.lines import LineError, resolve_line, same_table
 
 WRITE_TOOLS = frozenset(
     {
@@ -154,6 +155,30 @@ def _alternatives(requirement: dict[str, Any]) -> list[dict[str, Any]]:
     return requirement.get("any_of", [requirement])
 
 
+def canonical_args(tool: str, args: dict[str, Any], resolver: Resolver) -> dict[str, Any]:
+    """Order calls may name items, options and tables instead of giving ids: score what the
+    server would actually order ("Acısız" and modifier id 3 are the same call)."""
+    if tool not in {"create_order", "add_items_to_order"}:
+        return args
+    args = dict(args)
+    if isinstance(args.get("items"), list):
+        menu, details = resolver.menu()
+        items = []
+        for line in args["items"]:
+            try:
+                items.append(resolve_line(line, menu, details) if "name" in line else line)
+            except (LineError, KeyError, TypeError):
+                items.append(line)  # scored as sent: it will not match
+        args["items"] = items
+    if tool == "create_order" and args.get("table_id") is None and args.get("table_name"):
+        table = next(
+            (t for t in resolver.tables() if same_table(args["table_name"], t["name"])), None
+        )
+        if table:
+            args["table_id"] = table["id"]
+    return args
+
+
 def score(case: dict[str, Any], traj: Trajectory, resolver: Resolver) -> CaseResult:
     reasons: list[str] = []
     if traj.error:
@@ -175,7 +200,8 @@ def score(case: dict[str, Any], traj: Trajectory, resolver: Resolver) -> CaseRes
                 if call.is_error:
                     why = why or f"{call.tool} failed: {call.result[:160]}"
                     continue
-                reason = match(alt.get("args", {}), call.args, resolver)
+                args = canonical_args(call.tool, call.args, resolver)
+                reason = match(alt.get("args", {}), args, resolver)
                 if reason is None:
                     satisfied = True
                     break

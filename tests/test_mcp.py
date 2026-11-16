@@ -1,5 +1,7 @@
 """End-to-end tests: MCP client -> MCP server -> POS API -> SQLite, all in-process."""
 
+from datetime import date, timedelta
+
 import httpx
 import pytest
 from mcp import Client
@@ -41,6 +43,7 @@ async def open_adana_order(client) -> dict:
     spice = next(g for g in detail["modifier_groups"] if g["name"] == "Acı Seviyesi")
     table = data(await client.call_tool("list_tables", {"status": "free"}))[0]
     line = {
+        "name": "Adana Kebap",
         "menu_item_id": adana["id"],
         "quantity": 2,
         "modifier_ids": [spice["modifiers"][0]["id"]],
@@ -84,7 +87,8 @@ async def test_api_errors_reach_the_model_with_recovery_hints(pos_api):
     async with Client(mcp) as client:
         adana = data(await client.call_tool("search_menu", {"query": "adana"}))[0]
         result = await client.call_tool(
-            "create_order", {"channel": "takeaway", "items": [{"menu_item_id": adana["id"]}]}
+            "create_order",
+            {"channel": "takeaway", "items": [{"name": "Adana", "menu_item_id": adana["id"]}]},
         )
     assert result.is_error
     message = result.content[0].text
@@ -269,4 +273,156 @@ async def test_tokens_survive_a_server_restart_and_rejections_explain_themselves
         again = args | {"confirmation_token": unknown["confirmation_token"]}
         assert data(await client.call_tool("cancel_order", again))["status"] == "cancelled"
         reused = await client.call_tool("cancel_order", again)
-        assert data(reused)["status"] == "confirmation_invalid"
+        # a used token on a now-cancelled order: refused before any new preview
+        assert reused.is_error and "is cancelled" in reused.content[0].text
+
+
+# ----------------------------------------------------------------- v5: live-chat findings
+
+
+async def call(client, tool, args):
+    result = await client.call_tool(tool, args)
+    return result, (result.content[0].text if result.is_error else data(result))
+
+
+async def test_order_lines_by_name_and_option_names(pos_api):
+    async with Client(mcp) as client:
+        order = data(
+            await client.call_tool(
+                "create_order",
+                {
+                    "table_name": "Salon 4",
+                    "items": [
+                        {"name": "adana kebab", "options": ["spicy"]},
+                        {"name": "Adana Kebap", "options": ["not spicy", "Acısız"]},
+                        {"name": "lahmajun", "quantity": 3, "options": ["Acısız"]},
+                        {"name": "Ayran", "options": ["large"]},
+                    ],
+                },
+            )
+        )
+    assert order["table"] == "Salon 4"
+    got = sorted((i["name"], i["quantity"], i["modifiers"]) for i in order["items"])
+    assert got == [
+        ("Adana Kebap", 1, "Acılı"),
+        ("Adana Kebap", 1, "Acısız"),
+        ("Ayran", 1, "Büyük Boy"),
+        ("Lahmacun", 3, "Acısız"),
+    ]
+
+
+async def test_a_remembered_id_that_does_not_match_the_name_is_refused(pos_api):
+    async with Client(mcp) as client:
+        adana = data(await client.call_tool("search_menu", {"query": "adana"}))[0]
+        line = {"name": "Lahmacun", "menu_item_id": adana["id"], "options": ["Acısız"]}
+        result, text = await call(
+            client, "create_order", {"table_name": "Bahçe 2", "items": [line]}
+        )
+        assert result.is_error and text.count("NOT SAVED") == 1
+        assert "is 'Adana Kebap', not 'Lahmacun'" in text and "'Lahmacun' (menu_item_id" in text
+        result, text = await call(
+            client, "create_order", {"channel": "takeaway", "items": [{"name": "kebap"}]}
+        )
+        assert result.is_error and "Ask the user which one" in text
+        result, text = await call(
+            client,
+            "create_order",
+            {"channel": "takeaway", "items": [{"name": "Kola", "size": "L"}]},
+        )
+        assert result.is_error  # unknown fields are refused, not silently dropped
+        result, text = await call(
+            client,
+            "create_order",
+            {"channel": "takeaway", "items": [{"name": "Ayran", "options": ["iced"]}]},
+        )
+        assert result.is_error and "Büyük Boy" in text
+
+
+async def test_add_items_checks_the_order_belongs_to_the_table(pos_api):
+    async with Client(mcp) as client:
+        order = await open_adana_order(client)  # on the first free table
+        table = order["table"]
+        result, text = await call(
+            client,
+            "add_items_to_order",
+            {"order_id": order["id"] + 1000, "table_name": table, "items": [{"name": "Çay"}]},
+        )
+        assert result.is_error and f"open order is #{order['id']}" in text
+        result, text = await call(
+            client,
+            "add_items_to_order",
+            {"order_id": order["id"], "table_name": "Teras 2", "items": [{"name": "Çay"}]},
+        )
+        assert result.is_error and "Teras 2 has no open order" in text and "create_order" in text
+        ok = data(
+            await client.call_tool(
+                "add_items_to_order",
+                {
+                    "order_id": order["id"],
+                    "table_name": table,
+                    "items": [{"name": "Çay", "quantity": 2}],
+                },
+            )
+        )
+        assert any(i["name"] == "Çay" and i["quantity"] == 2 for i in ok["items"])
+
+
+async def test_table_names_match_whole_words(pos_api):
+    async with Client(mcp) as client:
+        tables = data(await client.call_tool("list_tables", {}))
+        salon1 = next(t for t in tables if t["name"] == "Salon 1")
+        result, text = await call(
+            client,
+            "set_table_status",
+            {"table_id": salon1["table_id"], "table_name": "Salon 10", "status": "reserved"},
+        )
+        assert result.is_error and "no table is named 'Salon 10'" in text
+        for said in ("salon1", "Salon 1 masası"):
+            data(
+                await client.call_tool(
+                    "set_table_status",
+                    {"table_id": salon1["table_id"], "table_name": said, "status": "free"},
+                )
+            )
+
+
+async def test_impossible_actions_fail_before_the_approval_step(pos_api):
+    async with Client(mcp) as client:
+        order = await open_adana_order(client)
+        paid = data(await client.call_tool("list_orders", {"status": "paid", "limit": 1}))[0]
+        result, text = await call(client, "cancel_order", {"order_id": paid["id"], "reason": "x"})
+        assert result.is_error and "is paid" in text
+        result, text = await call(
+            client,
+            "void_order_item",
+            {"order_id": order["id"], "order_item_id": 999999, "reason": "x"},
+        )
+        assert result.is_error and "Active lines:" in text and "Adana Kebap (Acılı)" in text
+        line = order["items"][0]["id"]
+        preview = data(
+            await client.call_tool(
+                "void_order_item", {"order_id": order["id"], "order_item_id": line, "reason": "x"}
+            )
+        )["preview"]
+        assert "Adana Kebap (Acılı)" in preview
+        result, text = await call(
+            client, "pay_order", {"order_id": order["id"], "method": "cash", "discount_percent": 10}
+        )
+        assert result.is_error and "discount_reason" in text
+        inv = data(await client.call_tool("get_inventory", {"search": "ground beef"}))[0]
+        args = {
+            "ingredient_id": inv["ingredient_id"],
+            "ingredient_name": inv["name"],
+            "quantity": 1_000_000,
+        }
+        result, text = await call(client, "record_stock_purchase", args)
+        assert result.is_error and "1,000,000" in text and "e+" not in text
+
+
+async def test_english_category_in_reports(pos_api):
+    async with Client(mcp) as client:
+        today = data(await client.call_tool("get_current_time", {}))["date"]
+        yesterday = (date.fromisoformat(today) - timedelta(days=1)).isoformat()
+        args = {"category": "drinks", "date_from": yesterday}
+        top = data(await client.call_tool("get_top_items", args))
+        assert top["items"] and {i["category"] for i in top["items"]} == {"İçecekler"}

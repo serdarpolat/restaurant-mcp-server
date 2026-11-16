@@ -24,11 +24,14 @@ def _item_read(item: MenuItem) -> MenuItemRead:
     )
 
 
-def check_category(session, category: str) -> None:
-    """Unknown categories get the valid list back, so an agent can retry ("soup" -> Çorbalar)."""
+def check_category(session, category: str) -> list[str]:
+    """The category names meant ("soups" -> ["Çorbalar"]); unknown ones get the valid list
+    back, so an agent can retry."""
     names = session.exec(select(Category.name).order_by(Category.sort_order)).all()
-    if not any(matches(category, n) for n in names):
+    found = [n for n in names if matches(category, n)]
+    if not found:
         raise Invalid(f"Unknown category '{category}'. Categories: {', '.join(names)}.")
+    return found
 
 
 @router.get("/categories", response_model=list[CategoryRead])

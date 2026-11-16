@@ -151,7 +151,7 @@ authentication.
 git clone https://github.com/serdarpolat/restaurant-mcp-server
 cd restaurant-mcp-server
 uv sync --extra dev
-uv run pytest                 # 72 tests
+uv run pytest                 # 78 tests
 uv run restaurant-pos-api     # http://127.0.0.1:8000/docs
 uv run restaurant-pos-mcp     # MCP server over stdio
 ```
@@ -218,7 +218,8 @@ Design choices that matter when an AI agent is the client:
 
 - **Errors that help the agent recover.** A missing required option returns the valid
   choices (`'Adana Kebap' needs 1-1 choice(s) for 'Acı Seviyesi'. Options: Acılı (id=1), ...`),
-  so the agent can ask the user instead of guessing.
+  so the agent can ask the user instead of guessing. Through MCP, failed writes start with
+  `NOT SAVED.`
 - **Business rules live in the API, not in the prompt.** One open order per table, no
   overselling stock, discounts need a reason, paid orders are immutable.
 - **Turkish- and English-aware search.** `iskender` finds `İskender`, `cay` finds `Çay`,
@@ -353,6 +354,32 @@ Still failing in v3 (4 of 90): leaving out an argument on a simple read (`group_
 question without looking at the stock movements.
 Full logs of the latest 3-run batch per version: [`evals/results/`](evals/results/).
 
+**v3 → v5: what a live chat found (not yet measured)**
+
+A long English/Turkish chat in LM Studio with the same model found failures the single-turn
+evals miss: the model reused an id from earlier in the chat (Adana's id for a lahmacun),
+added items to another table's order, invented order ids, dropped options the user had
+said, and twice reported success after failed calls. The server stopped every wrong write;
+v5 makes those mistakes harder to make and impossible to read as success:
+
+- **Order lines carry the item's name** (`{"name": "Lahmacun", "options": ["Acısız"]}`).
+  The name is checked against `menu_item_id`, or finds the item on its own. Options can be
+  given by name, also in English (`"not spicy"`, `"large"`).
+- **`add_items_to_order` takes the table's name** and refuses an order that is not that
+  table's open order, naming the right order id or saying to use `create_order`.
+- **Failed writes start with `NOT SAVED.`**, and the instructions say to report an order
+  only with the id a tool returned.
+- **Approval previews only for possible actions.** Cancelling a paid order or voiding a line
+  that is not on the order fails before the user is asked. Void previews show the options
+  (`Void 1 x Adana Kebap (Acılı)`).
+- Table names match whole words (`Salon 10` no longer passes as `Salon 1`), English
+  categories work in reports, discounts without a reason and absurd stock amounts are
+  refused before the approval step.
+
+A small local model can still claim success without calling a tool at all (seen once, after
+LM Studio itself rejected a 100% discount). No server can see that, so with local models,
+check the order in the POS, not the chat.
+
 ## Roadmap
 
 - [x] Data model & seed data
@@ -362,7 +389,7 @@ Full logs of the latest 3-run batch per version: [`evals/results/`](evals/result
 - [x] Eval harness: Turkish and English requests, argument-level scoring
 - [x] Eval results: tool-design changes measured before/after
 - [ ] Eval the preview + token approval path (clients without approval prompts)
-- [ ] Measure the English cases and the new search (v4)
+- [ ] Measure v5 (English cases, names in order lines)
 - [ ] More models in the comparison
 - [ ] Authentication, then a read-only connection to a real POS
 - [ ] Demo video

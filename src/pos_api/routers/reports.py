@@ -35,9 +35,8 @@ def top_items(
     limit: Annotated[int, Query(ge=1, le=50)] = 10,
     category: str | None = None,
 ):
-    if category:
-        check_category(session, category)
-    return service.top_items(session, *resolve_dates(date_from, date_to), sort, limit, category)
+    categories = check_category(session, category) if category else None
+    return service.top_items(session, *resolve_dates(date_from, date_to), sort, limit, categories)
 
 
 @router.get("/staff", response_model=list[StaffPerformanceRow])

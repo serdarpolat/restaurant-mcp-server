@@ -61,7 +61,22 @@ GLOSSARY: dict[str, tuple[str, ...]] = {
     "turnip": ("salgam",),
     "buttermilk": ("ayran",),
     "spicy": ("acili",),
-    "hot": ("acili",),
+    # ingredients (stock questions in English)
+    "mince": ("kiyma",),
+    "minced": ("kiyma",),
+    "ground": ("kiyma",),
+    "thigh": ("but",),
+    "dough": ("hamur",),
+    "rice": ("pirinc",),
+    "tomato": ("domates",),
+    "tomatoe": ("domates",),
+    "onion": ("sogan",),
+    "pepper": ("biber",),
+    "chili": ("biber",),
+    "parsley": ("maydanoz",),
+    "lemon": ("limon",),
+    "butter": ("tereyag",),
+    "bulgur": ("bulgur",),
 }
 
 # Words that carry no dish name: English/Turkish fillers and order words.

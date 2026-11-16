@@ -75,8 +75,9 @@ GOOD: dict[str, Plan] = {
                 {
                     "table_id": r(x, "table", "Salon 3"),
                     "items": [
-                        {"menu_item_id": r(x, "menu", "Ayran"), "quantity": 2},
+                        {"name": "Ayran", "menu_item_id": r(x, "menu", "Ayran"), "quantity": 2},
                         {
+                            "name": "Adana Kebap",
                             "menu_item_id": r(x, "menu", "Adana Kebap"),
                             "quantity": 2,
                             "modifier_ids": [r(x, "modifier", ["Adana Kebap", "Acılı"])],
@@ -96,6 +97,7 @@ GOOD: dict[str, Plan] = {
                     "table_id": r(x, "table", "Salon 4"),
                     "items": [
                         {
+                            "name": "Adana Kebap",
                             "menu_item_id": r(x, "menu", "Adana Kebap"),
                             "modifier_ids": [r(x, "modifier", ["Adana Kebap", spice])],
                         }
@@ -105,6 +107,22 @@ GOOD: dict[str, Plan] = {
             ),
         ],
         "Order opened on Salon 4.",
+    ),
+    # names and option names instead of ids score the same as ids
+    "write-mixed-spice": lambda x: (
+        [
+            (
+                "create_order",
+                {
+                    "table_name": "Salon 6",
+                    "items": [
+                        {"name": "adana kebab", "options": ["spicy"]},
+                        {"name": "Adana Kebap", "options": ["Acısız"]},
+                    ],
+                },
+            )
+        ],
+        "Sipariş açıldı.",
     ),
     "approve-cancel-restock": lambda x: (
         [
@@ -135,6 +153,7 @@ BAD: dict[str, Plan] = {
                     "table_id": r(x, "table", "Salon 4"),
                     "items": [
                         {
+                            "name": "Adana Kebap",
                             "menu_item_id": r(x, "menu", "Adana Kebap"),
                             "quantity": 2,
                             "modifier_ids": [
@@ -161,8 +180,9 @@ BAD: dict[str, Plan] = {
                 {
                     "table_id": r(x, "table", "Salon 3"),
                     "items": [
-                        {"menu_item_id": r(x, "menu", "Ayran"), "quantity": 2},
+                        {"name": "Ayran", "menu_item_id": r(x, "menu", "Ayran"), "quantity": 2},
                         {
+                            "name": "Adana Kebap",
                             "menu_item_id": r(x, "menu", "Adana Kebap"),
                             "quantity": 2,
                             "modifier_ids": [r(x, "modifier", ["Adana Kebap", "Acısız"])],
@@ -187,6 +207,7 @@ BAD: dict[str, Plan] = {
                     "table_id": r(x, "table", "Salon 4"),
                     "items": [
                         {
+                            "name": "Adana Kebap",
                             "menu_item_id": r(x, "menu", "Adana Kebap"),
                             "modifier_ids": [r(x, "modifier", ["Adana Kebap", "Acılı"])],
                         }

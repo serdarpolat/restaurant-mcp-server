@@ -73,7 +73,13 @@ async def request(method: str, path: str, *, params: dict | None = None, json: A
             detail = response.json().get("detail", response.text)
         except ValueError:
             detail = response.text
-        raise ToolError(f"POS API error {response.status_code}: {detail}")
+        if isinstance(detail, list):  # request validation: keep only the human-readable part
+            detail = "; ".join(
+                f"{'.'.join(str(p) for p in e.get('loc', [])[1:])}: {e.get('msg')}" for e in detail
+            )
+        # A failed write must not read like a success to a small model.
+        prefix = "NOT SAVED. " if method != "GET" else ""
+        raise ToolError(f"{prefix}POS API error {response.status_code}: {detail}")
     return response.json()
 
 

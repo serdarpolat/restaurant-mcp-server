@@ -110,6 +110,29 @@ class Resolver:
     def __init__(self, session: Session):
         self.session = session
 
+    def menu(self) -> tuple[list[dict[str, Any]], dict[int, dict[str, Any]]]:
+        """The menu as the POS API shows it (items, and item details with options)."""
+        items = self.session.exec(select(MenuItem).where(MenuItem.is_active)).all()
+        menu = [{"id": i.id, "name": i.name} for i in items]
+        details = {
+            i.id: {
+                "id": i.id,
+                "name": i.name,
+                "modifier_groups": [
+                    {
+                        "name": g.name,
+                        "modifiers": [{"id": m.id, "name": m.name} for m in g.modifiers],
+                    }
+                    for g in i.modifier_groups
+                ],
+            }
+            for i in items
+        }
+        return menu, details
+
+    def tables(self) -> list[dict[str, Any]]:
+        return [{"id": t.id, "name": t.name} for t in self.session.exec(select(DiningTable)).all()]
+
     def resolve(self, ref: str, value: Any) -> Any:
         s = self.session
         if ref == "menu":

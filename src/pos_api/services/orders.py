@@ -59,7 +59,8 @@ def _build_line(session: Session, data: OrderItemCreate) -> tuple[OrderItem, lis
     if not item.is_active:
         raise Conflict(f"'{item.name}' is not available right now.")
 
-    chosen = [session.get(Modifier, mid) for mid in data.modifier_ids]
+    # The same option twice is one choice ("Acısız", "Acısız").
+    chosen = [session.get(Modifier, mid) for mid in dict.fromkeys(data.modifier_ids)]
     if any(m is None for m in chosen):
         raise Invalid(f"Unknown modifier id in {data.modifier_ids}.")
 
