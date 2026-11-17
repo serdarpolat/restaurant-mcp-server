@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from pos_mcp import api, i18n
 from pos_mcp.confirmation import Approval, Gate, blocked, gate
-from pos_mcp.i18n import ReplyLanguage
+from pos_mcp.i18n import ReplyLanguage, UserMessage
 from pos_mcp.lines import (
     LineError,
     merge_lines,
@@ -42,7 +42,8 @@ write in any language.
 - Answer in the language of the user's LATEST message:
   English -> English, Türkçe -> Türkçe, Deutsch -> Deutsch.
   Keep menu and table names as they are; the sentences around them are in the user's
-  language. Write tools take reply_language (that language's code) and answer in it.
+  language. Write tools take user_message (the user's latest message, word for word)
+  and answer in its language.
 - Dates: "yesterday" -> date_from='yesterday' (one date = that day only); "today" ->
   'today'; "last 7 days" -> date_from='-7', date_to='today'. Never compute a year yourself.
   Money is TRY, times are local.
@@ -554,7 +555,7 @@ async def _to_table(table: dict[str, Any], lines: list[dict[str, Any]]) -> dict[
 @mcp.tool(annotations=WRITE)
 async def create_order(
     items: Items,
-    reply_language: ReplyLanguage,
+    user_message: UserMessage,
     channel: Annotated[
         Literal["dine_in", "takeaway", "delivery"],
         Field(description="'paket' / 'paket servis' = takeaway (no table); 'kurye' = delivery."),
@@ -563,6 +564,7 @@ async def create_order(
     table_id: Annotated[
         int | None, Field(description="Optional; checked against table_name.")
     ] = None,
+    reply_language: ReplyLanguage = None,
 ) -> dict[str, Any]:
     """Order for a table (dine-in) or a takeaway/delivery order.
 
@@ -573,7 +575,7 @@ async def create_order(
     (e.g. the spice level), do not choose one: ask the user first. Units of the same item
     with different options go on separate lines.
     """
-    i18n.use(reply_language)
+    i18n.use(user_message, reply_language)
     if channel == "dine_in":
         if table_name and table_id is not None:
             await _checked_table(table_id, table_name)
@@ -603,7 +605,7 @@ async def create_order(
 @mcp.tool(annotations=WRITE)
 async def add_items_to_order(
     items: Items,
-    reply_language: ReplyLanguage,
+    user_message: UserMessage,
     table_name: Annotated[
         str,
         Field(
@@ -615,6 +617,7 @@ async def add_items_to_order(
         int | None,
         Field(description="Only for takeaway/delivery orders. Tables are found by table_name."),
     ] = None,
+    reply_language: ReplyLanguage = None,
 ) -> dict[str, Any]:
     """ADD items to what a table is having (same as create_order for a table).
 
@@ -622,7 +625,7 @@ async def add_items_to_order(
     cancel a line use void_order_item. If the user named no table, do not call: ask which
     table. If a REQUIRED option (e.g. the spice level) is missing, ask; never choose one.
     """
-    i18n.use(reply_language)
+    i18n.use(user_message, reply_language)
     if _norm(table_name) not in _NO_TABLE:
         return await _to_table(await _table_by_name(table_name), await _lines(items))
     if order_id is None:
@@ -647,14 +650,15 @@ async def set_table_status(
     table_id: TableId,
     table_name: TableName,
     status: Literal["free", "reserved"],
-    reply_language: ReplyLanguage,
+    user_message: UserMessage,
+    reply_language: ReplyLanguage = None,
 ) -> dict[str, Any]:
     """Mark a table without an open order as free or reserved.
 
     table_id comes from list_tables; table_name is the name the user said. Only the status
     is stored: there is no reservation time or guest name.
     """
-    i18n.use(reply_language)
+    i18n.use(user_message, reply_language)
     await _checked_table(table_id, table_name)
     table = await api.patch(f"/tables/{table_id}", {"status": status})
     summary = i18n.t("table_status", table=table["name"], status=i18n.t(f"status_{status}"))
@@ -719,9 +723,10 @@ async def approve_void(
     return_to_stock: bool,
     confirmation_token: str | None,
     user_reply: str | None,
-    reply_language: str,
+    user_message: str,
+    reply_language: str | None,
 ) -> Elicit[Approval] | Gate:
-    i18n.use(reply_language)
+    i18n.use(user_message, reply_language)
     order = await api.get(f"/orders/{order_id}")
     _open_order(order)
     active = [i for i in order["items"] if i["status"] == "active"]
@@ -751,17 +756,18 @@ async def void_order_item(
     reason: Annotated[
         str, Field(min_length=1, description="Why it is voided, e.g. 'Müşteri vazgeçti'.")
     ],
-    reply_language: ReplyLanguage,
+    user_message: UserMessage,
     approval: Annotated[ElicitationResult[Approval], Resolve(approve_void)],
     return_to_stock: ReturnToStock = False,
     confirmation_token: ConfirmToken = None,
     user_reply: UserReply = None,
+    reply_language: ReplyLanguage = None,
 ) -> dict[str, Any]:
     """Void (cancel) one line of an open order. Requires user approval.
 
     order_item_id is the line id from get_order(table_name=...).
     """
-    i18n.use(reply_language)
+    i18n.use(user_message, reply_language)
     if (response := blocked(approval)) is not None:
         return response
     order = await api.post(
@@ -786,9 +792,10 @@ async def approve_cancel(
     return_to_stock: bool,
     confirmation_token: str | None,
     user_reply: str | None,
-    reply_language: str,
+    user_message: str,
+    reply_language: str | None,
 ) -> Elicit[Approval] | Gate:
-    i18n.use(reply_language)
+    i18n.use(user_message, reply_language)
     order = await api.get(f"/orders/{order_id}")
     _open_order(order)
     preview = i18n.t(
@@ -807,17 +814,18 @@ async def approve_cancel(
 async def cancel_order(
     order_id: OrderId,
     reason: Annotated[str, Field(min_length=1, description="Why, e.g. 'Müşteri vazgeçti'.")],
-    reply_language: ReplyLanguage,
+    user_message: UserMessage,
     approval: Annotated[ElicitationResult[Approval], Resolve(approve_cancel)],
     return_to_stock: ReturnToStock = False,
     confirmation_token: ConfirmToken = None,
     user_reply: UserReply = None,
+    reply_language: ReplyLanguage = None,
 ) -> dict[str, Any]:
     """Cancel a whole open order and free its table. Requires user approval.
 
     The reason is the user's own words; if they gave none, ask - never make one up.
     """
-    i18n.use(reply_language)
+    i18n.use(user_message, reply_language)
     if (response := blocked(approval)) is not None:
         return response
     order = await api.post(
@@ -836,9 +844,10 @@ async def approve_payment(
     discount_reason: str | None,
     confirmation_token: str | None,
     user_reply: str | None,
-    reply_language: str,
+    user_message: str,
+    reply_language: str | None,
 ) -> Elicit[Approval] | Gate:
-    i18n.use(reply_language)
+    i18n.use(user_message, reply_language)
     order = await api.get(f"/orders/{order_id}")
     _open_order(order)
     if discount_percent and not (discount_reason or "").strip():
@@ -870,18 +879,19 @@ async def pay_order(
         Literal["cash", "card", "online"],
         Field(description="As the user said it ('kart', 'by card' = card). If not said, ask."),
     ],
-    reply_language: ReplyLanguage,
+    user_message: UserMessage,
     approval: Annotated[ElicitationResult[Approval], Resolve(approve_payment)],
     discount_percent: Annotated[float, Field(ge=0, le=50)] = 0,
     discount_reason: Annotated[str | None, Field(description="Required with a discount.")] = None,
     confirmation_token: ConfirmToken = None,
     user_reply: UserReply = None,
+    reply_language: ReplyLanguage = None,
 ) -> dict[str, Any]:
     """Take payment for an open order and close it (frees the table). Requires user approval.
 
     For a table's bill, order_id is list_tables' open_order_id (or get_order(table_name=...)).
     """
-    i18n.use(reply_language)
+    i18n.use(user_message, reply_language)
     if (response := blocked(approval)) is not None:
         return response
     order = await api.post(
@@ -910,9 +920,10 @@ async def approve_purchase(
     note: str,
     confirmation_token: str | None,
     user_reply: str | None,
-    reply_language: str,
+    user_message: str,
+    reply_language: str | None,
 ) -> Elicit[Approval] | Gate:
-    i18n.use(reply_language)
+    i18n.use(user_message, reply_language)
     ingredient = await _checked_ingredient(ingredient_id, ingredient_name)
     limit = max(20 * ingredient["reorder_level"], 50)
     if quantity > limit:
@@ -937,17 +948,18 @@ async def record_stock_purchase(
     ingredient_id: IngredientId,
     ingredient_name: IngredientName,
     quantity: Annotated[float, Field(gt=0, description="In the ingredient's own unit.")],
-    reply_language: ReplyLanguage,
+    user_message: UserMessage,
     approval: Annotated[ElicitationResult[Approval], Resolve(approve_purchase)],
     note: str = "Manuel alım",
     confirmation_token: ConfirmToken = None,
     user_reply: UserReply = None,
+    reply_language: ReplyLanguage = None,
 ) -> dict[str, Any]:
     """Record received stock for an ingredient (increases stock). Requires user approval.
 
     ingredient_id comes from get_inventory(search=...); quantity is in its own unit.
     """
-    i18n.use(reply_language)
+    i18n.use(user_message, reply_language)
     if (response := blocked(approval)) is not None:
         return response
     result = await api.post(

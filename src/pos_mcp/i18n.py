@@ -7,6 +7,13 @@ the server writes its summaries, previews and approval questions in that languag
 the model is most likely to copy is already in the user's language. This works in every MCP
 client, because tool results always reach the model (server instructions may not).
 
+Which language? Small models judge it badly: asked for "the language of the user's
+message", a 24B model wrote 'tr' for half of the English requests (the restaurant is
+Turkish) and 'en' for some Turkish ones. Copying text is easier than classifying it, so write
+tools also take user_message, the user's words verbatim, and the server detects the language
+itself (language.detect_message, Turkish/English). reply_language is the fallback for other
+languages and for messages too short to tell ("ok").
+
 Turkish and English texts are written out; any other language gets English text plus an
 explicit "answer the user in <language>" line.
 """
@@ -17,14 +24,23 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from pos_api.text import normalize
+from pos_mcp.language import detect_message
 
-ReplyLanguage = Annotated[
+UserMessage = Annotated[
     str,
     Field(
-        description="Language of the user's LATEST message as a code: 'en' if they wrote in "
-        "English, 'tr' in Turkish, 'de' in German... Not the language of the menu or table "
-        "names. The result is written in this language; answer the user in it too.",
-        min_length=2,
+        description="The user's latest message, copied word for word (not translated, not "
+        "summarized). The server answers in that message's language; answer the user in it "
+        "too. Not stored.",
+        min_length=1,
+        max_length=2000,
+    ),
+]
+ReplyLanguage = Annotated[
+    str | None,
+    Field(
+        description="Optional: the user's language as a code ('en', 'tr', 'de'...), used when "
+        "it cannot be told from user_message.",
         max_length=20,
     ),
 ]
@@ -69,9 +85,12 @@ def code(language: str | None) -> str:
     return _ALIASES.get(key, key or "en")
 
 
-def use(language: str | None) -> str:
-    """Set the reply language for the rest of this tool call; returns its code."""
-    lang = code(language)
+def use(user_message: str | None, language: str | None = None) -> str:
+    """Set the reply language for the rest of this tool call; returns its code.
+
+    The language of the user's own words wins; the model's reply_language is the fallback.
+    """
+    lang = detect_message(user_message) or (code(language) if language else "en")
     _current.set(lang)
     return lang
 

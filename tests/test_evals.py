@@ -55,10 +55,9 @@ class ScriptedAgent:
     async def run(self, prompt: str, session: ToolSession) -> Trajectory:
         case_id = next(c["id"] for c in SPEC["cases"] if c["prompt"] == prompt)
         calls, final_text = self.plans[case_id](self.resolver)
-        case = next(c for c in SPEC["cases"] if c["id"] == case_id)
         for tool, args in calls:
-            if tool in WRITE_TOOLS:  # a model that says the user's language, as asked
-                args = {"reply_language": case_language(case), **args}
+            if tool in WRITE_TOOLS:  # a model that copies the user's message, as asked
+                args = {"user_message": prompt, **args}
             await session.call(tool, args)
         return Trajectory(
             calls=list(session.calls),
@@ -545,3 +544,11 @@ def test_no_instructions_mode_hides_the_server_rules():
     bare = system_prompt(server_instructions=False)
     assert INSTRUCTIONS not in bare
     assert "language" not in bare  # the server, not the eval, has to carry that rule
+
+
+def test_the_server_tells_the_language_of_every_eval_request():
+    """The server reads the user's words (user_message) to answer in their language."""
+    from pos_mcp.language import detect_message
+
+    wrong = [c["prompt"] for c in SPEC["cases"] if detect_message(c["prompt"]) != case_language(c)]
+    assert wrong == []

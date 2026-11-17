@@ -25,11 +25,12 @@ WRITE_TOOLS = {
 
 
 class Client(_Client):
-    """The MCP client, as a model that says reply_language: English unless a test says so."""
+    """The MCP client, as a model that copies the user's message into write tools (an
+    English one unless a test passes its own)."""
 
     async def call_tool(self, name, arguments=None, *args, **kwargs):
         if name in WRITE_TOOLS and arguments is not None:
-            arguments = {"reply_language": "en", **arguments}
+            arguments = {"user_message": "Please do it.", **arguments}
         return await super().call_tool(name, arguments, *args, **kwargs)
 
 
@@ -520,19 +521,25 @@ async def test_write_results_are_in_the_users_language(pos_api):
         tr = data(
             await client.call_tool(
                 "create_order",
-                {"table_name": "Salon 1", "items": [line], "reply_language": "tr"},
+                {"table_name": "Salon 1", "items": [line], "user_message": "Salon 1'e acılı Adana"},
             )
         )
         en = data(
             await client.call_tool(
                 "create_order",
-                {"table_name": "Salon 1", "items": [line], "reply_language": "English"},
+                {"table_name": "Salon 1", "items": [line], "user_message": "Add a spicy Adana"},
             )
         )
         de = data(
             await client.call_tool(
                 "create_order",
-                {"channel": "takeaway", "items": [line], "reply_language": "de"},
+                # German is not detected: the model's reply_language decides
+                {
+                    "channel": "takeaway",
+                    "items": [line],
+                    "user_message": "Einmal Adana zum Mitnehmen",
+                    "reply_language": "de",
+                },
             )
         )
     assert tr["summary"].startswith("AÇILDI: Salon 1 için")
@@ -546,23 +553,57 @@ async def test_write_results_are_in_the_users_language(pos_api):
     assert list(en)[-1] == "answer_the_user_in"  # read last, after the Turkish data
 
 
-async def test_reply_language_is_required_on_write_tools(pos_api):
-    async with _Client(mcp) as client:  # the plain client: no reply_language added
+async def test_user_message_is_required_on_write_tools(pos_api):
+    async with _Client(mcp) as client:  # the plain client: no user_message added
         tools = {t.name: t for t in (await client.list_tools()).tools}
         for name in WRITE_TOOLS:
-            assert "reply_language" in tools[name].input_schema["required"], name
+            assert "user_message" in tools[name].input_schema["required"], name
+            assert "reply_language" not in tools[name].input_schema["required"], name
         result = await client.call_tool(
             "create_order", {"table_name": "Salon 1", "items": [{"name": "Ayran"}]}
         )
-    assert result.is_error and "reply_language" in result.content[0].text
+    assert result.is_error and "user_message" in result.content[0].text
+
+
+async def test_the_users_words_beat_the_models_language_guess(pos_api):
+    """Seen in v6.3: the model wrote reply_language='tr' for English requests."""
+    async with Client(mcp) as client:
+        result = data(
+            await client.call_tool(
+                "create_order",
+                {
+                    "table_name": "Salon 2",
+                    "items": [{"name": "Çay", "quantity": 2}],
+                    "user_message": "Add two teas to Salon 2.",
+                    "reply_language": "tr",
+                },
+            )
+        )
+        short = data(
+            await client.call_tool(
+                "create_order",
+                {
+                    "table_name": "Salon 2",
+                    "items": [{"name": "Çay"}],
+                    "user_message": "ok",  # too short to tell: reply_language decides
+                    "reply_language": "tr",
+                },
+            )
+        )
+    assert result["summary"].startswith("OPENED") and result["answer_the_user_in"] == "English"
+    assert short["summary"].startswith("EKLENDİ") and short["answer_the_user_in"] == "Turkish"
 
 
 async def test_approval_preview_and_question_in_the_users_language(pos_api):
     async with Client(mcp) as client:
         order = await open_adana_order(client)
         args = {"order_id": order["id"], "reason": "Müşteri gitti", "return_to_stock": True}
-        tr = data(await client.call_tool("cancel_order", args | {"reply_language": "tr"}))
-        en = data(await client.call_tool("cancel_order", args | {"reply_language": "en"}))
+        tr = data(
+            await client.call_tool("cancel_order", args | {"user_message": "Siparişi iptal et"})
+        )
+        en = data(
+            await client.call_tool("cancel_order", args | {"user_message": "Cancel the order"})
+        )
         assert tr["preview"].startswith(f"#{order['id']} numaralı sipariş")
         assert "Malzemeler stoğa geri eklenecek" in tr["preview"]
         assert tr["ask_user"] == "Onaylıyor musunuz? (evet / hayır)"
@@ -571,10 +612,10 @@ async def test_approval_preview_and_question_in_the_users_language(pos_api):
         assert "in English" in en["message"] and en["answer_the_user_in"] == "English"
 
         # the language is not part of what is approved: a token from the Turkish preview
-        # works when the model calls again in English
+        # works when the user answers in English
         approved = {"confirmation_token": tr["confirmation_token"], "user_reply": "yes"}
         done = data(
-            await client.call_tool("cancel_order", args | approved | {"reply_language": "en"})
+            await client.call_tool("cancel_order", args | approved | {"user_message": "yes"})
         )
     assert done["status"] == "cancelled"
     assert done["summary"].startswith(f"CANCELLED order #{order['id']}")
@@ -591,7 +632,8 @@ async def test_elicitation_asks_in_the_users_language(pos_api):
         order = await open_adana_order(client)
         paid = data(
             await client.call_tool(
-                "pay_order", {"order_id": order["id"], "method": "card", "reply_language": "tr"}
+                "pay_order",
+                {"order_id": order["id"], "method": "card", "user_message": "Kartla kapat"},
             )
         )
     assert "kart ile" in asked[0] and asked[0].endswith("Onaylıyor musunuz? (evet / hayır)")
@@ -603,7 +645,7 @@ async def test_refusals_name_the_language_to_answer_in(pos_api):
         result, text = await call(
             client,
             "create_order",
-            {"items": [{"name": "Ayran"}], "reply_language": "tr"},  # dine-in, no table
+            {"items": [{"name": "Ayran"}], "user_message": "2 ayran ekle"},  # no table
         )
     assert result.is_error and text.endswith("(Answer the user in Turkish.)")
 
@@ -623,6 +665,7 @@ def test_language_codes_and_neutral_instructions():
     from pos_mcp.confirmation import approves
     from pos_mcp.server import INSTRUCTIONS
 
+    assert i18n.use("Salon 4'e 1 Adana Kebap.") == "tr" and i18n.use("ok", "de") == "de"
     assert [i18n.code(x) for x in ("en", "EN", "English", "en-US", "Türkçe", "tr", "nl")] == [
         "en",
         "en",
