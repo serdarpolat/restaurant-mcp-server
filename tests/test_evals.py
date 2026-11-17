@@ -6,10 +6,13 @@ from collections.abc import Callable
 import pytest
 from sqlmodel import Session
 
+from evals.agent import system_prompt
 from evals.harness import ToolSession
+from evals.language import detect
 from evals.run import load_cases, run_cases, select_cases, summary_markdown
 from evals.scoring import MISSING, ToolCall, Trajectory, match, score
 from evals.world import Resolver, build_world, sqlite_engine
+from pos_mcp.server import INSTRUCTIONS
 
 SPEC = load_cases()
 CASES = {c["id"]: c for c in SPEC["cases"]}
@@ -455,3 +458,77 @@ def test_calls_are_scored_as_the_server_reads_them(resolver):
     assert score(CASES["report-top5-yesterday"], words, resolver).passed
     bill = Trajectory(calls=[ToolCall("get_order", {"table_name": "Teras 2"})], final_text="x")
     assert score(CASES["floor-bill-total"], bill, resolver).passed
+
+
+# --------------------------------------------------------------------------- #
+# Answer language: the user's language, whatever language the data is in
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # English answers full of Turkish names stay English
+        ("Opened order #2983 on Salon 4: 1 x Adana Kebap (Acılı), 1 x Adana Kebap (Acısız).", "en"),
+        ("The lentil soup (Mercimek Çorbası) costs 150 TL.", "en"),
+        ("Which spice level would you like for the Adana Kebap? (Acılı, Az Acılı, Acısız)", "en"),
+        # Real v6.2 answers to English requests
+        ("Sipariş #2983 Salon 4 için açıldı: 1 adet Adana Kebap (Acılı), toplam 560.00 TRY.", "tr"),
+        ("Bahçe 2 masasına iki çay eklendi. Toplam: 1.250,00 TRY.", "tr"),
+        ("Adana kebab için acı seviyesini seçin: - Acılı - Az Acılı - Acısız", "tr"),
+        # Turkish answers with an English word or two stay Turkish
+        ("Bahçe 2'deki ayranlar silindi, sipariş toplamı 1.120 TL (order #2980).", "tr"),
+        # Too short to tell: not judged
+        ("İskender 620 TL.", None),
+        ("", None),
+    ],
+)
+def test_language_detection(text, expected):
+    assert detect(text) == expected
+
+
+def test_answers_in_the_wrong_language_fail(resolver):
+    english = CASES["en-ask-spice"]
+    turkish = "Adana Kebap için hangi acı seviyesini istersiniz? (Acılı, Az Acılı veya Acısız)"
+    result = score(english, Trajectory(final_text=turkish), resolver)
+    assert "answered in Turkish to a English request" in result.reasons
+    assert result.language == "en" and result.answer_language == "tr"
+    assert result.language_ok is False
+
+    ok = "Which spice level would you like for the Adana Kebap: Acılı, Az Acılı or Acısız?"
+    assert score(english, Trajectory(final_text=ok), resolver).passed
+
+    # and the other way round: a Turkish request answered in English
+    result = score(
+        CASES["ask-spice-adana"],
+        Trajectory(final_text="Which spice level would you like for the Adana Kebap?"),
+        resolver,
+    )
+    assert "answered in English to a Turkish request" in result.reasons
+
+    # an answer too short to tell is not judged
+    short = score(CASES["menu-price-iskender"], Trajectory(final_text="İskender 620 TL."), resolver)
+    assert short.language_ok is None
+    assert not any("answered in" in x for x in short.reasons)
+
+
+def test_summary_reports_the_answer_language(resolver):
+    results = [
+        score(CASES["en-ask-spice"], Trajectory(final_text=text), resolver)
+        for text in (
+            "Which spice level would you like: Acılı, Az Acılı or Acısız?",
+            "Hangi acı seviyesini istersiniz? Acılı, Az Acılı veya Acısız?",
+            "?",
+        )
+    ]
+    md = summary_markdown("scripted", results, server_instructions=False)
+    assert "Right language" in md
+    assert "| english | 3 | 1/3 (33%) | 100% | 1/2 |" in md
+    assert "server instructions OFF" in md
+
+
+def test_no_instructions_mode_hides_the_server_rules():
+    assert INSTRUCTIONS in system_prompt(server_instructions=True)
+    bare = system_prompt(server_instructions=False)
+    assert INSTRUCTIONS not in bare
+    assert "language" not in bare  # the server, not the eval, has to carry that rule

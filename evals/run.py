@@ -5,6 +5,8 @@
     # Local model in LM Studio (start its server first), no key needed:
     uv run python -m evals.run --provider lmstudio --list-models
     uv run python -m evals.run --provider lmstudio --model mistralai/magistral-small-2509
+    # Without the server's MCP instructions (clients that drop them):
+    uv run python -m evals.run --provider lmstudio --model ... --no-instructions
 
     # Hosted (keys in .env): ANTHROPIC_API_KEY, GEMINI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY
     uv run python -m evals.run --provider anthropic --model claude-sonnet-5-5
@@ -30,7 +32,7 @@ import httpx
 import yaml
 from sqlmodel import Session
 
-from evals.agent import PROVIDERS, Agent, AnthropicAgent, OpenAICompatibleAgent
+from evals.agent import PROVIDERS, Agent, AnthropicAgent, OpenAICompatibleAgent, system_prompt
 from evals.harness import tool_session
 from evals.scoring import CaseResult, score
 from evals.world import Resolver, build_world, sqlite_engine
@@ -117,7 +119,14 @@ def _pct(part: int, whole: int) -> str:
     return f"{100 * part / whole:.0f}%" if whole else "-"
 
 
-def summary_markdown(model: str, results: list[CaseResult]) -> str:
+def _language(results: list[CaseResult]) -> str:
+    known = [r.language_ok for r in results if r.language_ok is not None]
+    return f"{sum(known)}/{len(known)}" if known else "-"
+
+
+def summary_markdown(
+    model: str, results: list[CaseResult], server_instructions: bool = True
+) -> str:
     runs = max((r.run for r in results), default=1)
     case_ids = list(dict.fromkeys(r.id for r in results))
     by_cat: dict[str, list[CaseResult]] = defaultdict(list)
@@ -128,13 +137,15 @@ def summary_markdown(model: str, results: list[CaseResult]) -> str:
     header = f"Run: {datetime.now().strftime('%Y-%m-%d %H:%M')} · {len(case_ids)} cases"
     if runs > 1:
         header += f" × {runs} runs (counts below are over all runs)"
+    if not server_instructions:
+        header += " · server instructions OFF (model sees tool descriptions and results only)"
     lines = [
         f"## {model}",
         "",
         header,
         "",
-        "| Category | Cases | Passed | Right tool |",
-        "|---|---:|---:|---:|",
+        "| Category | Cases | Passed | Right tool | Right language |",
+        "|---|---:|---:|---:|---:|",
     ]
     for cat in order:
         rs = by_cat[cat]
@@ -142,14 +153,22 @@ def summary_markdown(model: str, results: list[CaseResult]) -> str:
         tool_ok = sum(r.tool_ok for r in rs)
         lines.append(
             f"| {cat} | {len(rs) // runs} | {passed}/{len(rs)} ({_pct(passed, len(rs))}) "
-            f"| {_pct(tool_ok, len(rs))} |"
+            f"| {_pct(tool_ok, len(rs))} | {_language(rs)} |"
         )
     passed = sum(r.passed for r in results)
     tool_ok = sum(r.tool_ok for r in results)
     lines.append(
         f"| **total** | **{len(case_ids)}** | **{passed}/{len(results)} "
-        f"({_pct(passed, len(results))})** | **{_pct(tool_ok, len(results))}** |"
+        f"({_pct(passed, len(results))})** | **{_pct(tool_ok, len(results))}** "
+        f"| **{_language(results)}** |"
     )
+    lines += [
+        "",
+        (
+            "Right language: answers in the request's language, of those whose language is "
+            'clear (very short answers such as "İskender 620 TL." are not counted).'
+        ),
+    ]
 
     if runs > 1:
         per_run = [sum(r.passed for r in results if r.run == i) for i in range(1, runs + 1)]
@@ -198,24 +217,27 @@ def summary_markdown(model: str, results: list[CaseResult]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def save(model: str, results: list[CaseResult], out_dir: Path) -> Path:
+def save(
+    model: str, results: list[CaseResult], out_dir: Path, server_instructions: bool = True
+) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = model.replace("/", "_").replace(":", "_")
     (out_dir / f"{stem}.json").write_text(
         json.dumps([r.to_dict() for r in results], ensure_ascii=False, indent=2), encoding="utf-8"
     )
     md = out_dir / f"{stem}.md"
-    md.write_text(summary_markdown(model, results), encoding="utf-8")
+    md.write_text(summary_markdown(model, results, server_instructions), encoding="utf-8")
     return md
 
 
 def make_agent(args: argparse.Namespace) -> Agent:
+    system = system_prompt(server_instructions=not args.no_instructions)
     if args.provider == "anthropic":
         if not os.getenv("ANTHROPIC_API_KEY"):
             raise SystemExit(
                 "Set ANTHROPIC_API_KEY (environment or .env) to use --provider anthropic."
             )
-        return AnthropicAgent(args.model, max_steps=args.max_steps)
+        return AnthropicAgent(args.model, max_steps=args.max_steps, system=system)
 
     base_url, key_env = PROVIDERS.get(args.provider, (None, None))
     base_url = args.base_url or base_url
@@ -224,7 +246,9 @@ def make_agent(args: argparse.Namespace) -> Agent:
     key = os.getenv(key_env) if key_env else os.getenv("OPENAI_API_KEY")
     if key_env and not key:
         raise SystemExit(f"Set {key_env} (environment or .env) to use --provider {args.provider}.")
-    return OpenAICompatibleAgent(args.model or "", base_url, key, max_steps=args.max_steps)
+    return OpenAICompatibleAgent(
+        args.model or "", base_url, key, max_steps=args.max_steps, system=system
+    )
 
 
 def main() -> None:
@@ -242,6 +266,12 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=EVALS_DIR / "results")
     parser.add_argument("--tag", help="Suffix for the result files, e.g. baseline.")
     parser.add_argument("--repeat", type=int, default=1, help="Run every case N times.")
+    parser.add_argument(
+        "--no-instructions",
+        action="store_true",
+        help="Do not give the model the server's instructions, as clients that drop MCP "
+        "instructions (the model sees only tool descriptions and results).",
+    )
     args = parser.parse_args()
     if args.provider == "anthropic" and not args.model:
         args.model = "claude-sonnet-5-5"
@@ -270,13 +300,15 @@ def main() -> None:
     label = args.model if args.provider == "anthropic" else f"{args.provider}/{args.model}"
     if args.tag:
         label += f"@{args.tag}"
+    if args.no_instructions:
+        label += "+no-instructions"
 
     with tempfile.TemporaryDirectory() as tmp:
         results = asyncio.run(
             run_cases(agent, spec, cases, Path(tmp), days=args.days, repeat=args.repeat)
         )
 
-    md = save(label, results, args.out)
+    md = save(label, results, args.out, server_instructions=not args.no_instructions)
     passed = sum(r.passed for r in results)
     runs = f" over {args.repeat} runs" if args.repeat > 1 else ""
     print(f"\n{passed}/{len(results)} passed{runs}. Summary: {md}")

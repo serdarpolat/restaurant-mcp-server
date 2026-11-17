@@ -12,14 +12,21 @@ from evals.harness import ToolSession
 from evals.scoring import ToolCall, Trajectory
 from pos_mcp.server import INSTRUCTIONS
 
-SYSTEM_PROMPT = (
-    INSTRUCTIONS
-    + """
-You assist the restaurant staff. Answer in the user's language.
+# What every run tells the model about the eval itself (not about the restaurant).
+EVAL_PROTOCOL = """You assist the restaurant staff.
 The user cannot reply during this task. If a required detail is missing, do not guess:
 end with a question asking for it.
 """
-)
+
+# Default: the server's instructions reach the model, as in clients that pass MCP
+# `instructions` on. With --no-instructions the model sees only the tool descriptions and
+# tool results, as in clients that drop them: the server must then carry every rule.
+SYSTEM_PROMPT = INSTRUCTIONS + "\n" + EVAL_PROTOCOL + "Answer in the user's language.\n"
+BARE_SYSTEM_PROMPT = EVAL_PROTOCOL
+
+
+def system_prompt(server_instructions: bool = True) -> str:
+    return SYSTEM_PROMPT if server_instructions else BARE_SYSTEM_PROMPT
 
 
 class Agent(Protocol):
@@ -31,7 +38,9 @@ class Agent(Protocol):
 class AnthropicAgent:
     """Plain tool-use loop on the Anthropic Messages API (no framework)."""
 
-    def __init__(self, model: str, max_steps: int = 10, max_tokens: int = 2048):
+    def __init__(
+        self, model: str, max_steps: int = 10, max_tokens: int = 2048, system: str = SYSTEM_PROMPT
+    ):
         try:
             import anthropic
         except ImportError as exc:
@@ -42,6 +51,7 @@ class AnthropicAgent:
         self.model = model
         self.max_steps = max_steps
         self.max_tokens = max_tokens
+        self.system = system
         self.client = anthropic.AsyncAnthropic(max_retries=6)
 
     async def run(self, prompt: str, session: ToolSession) -> Trajectory:
@@ -55,7 +65,7 @@ class AnthropicAgent:
                 response = await self.client.messages.create(
                     model=self.model,
                     max_tokens=self.max_tokens,
-                    system=SYSTEM_PROMPT,
+                    system=self.system,
                     tools=tools,
                     messages=messages,
                 )
@@ -130,8 +140,10 @@ class OpenAICompatibleAgent:
         max_tokens: int = 4096,
         timeout: float = 600,
         transport: httpx.AsyncBaseTransport | None = None,
+        system: str = SYSTEM_PROMPT,
     ):
         self.name = model
+        self.system = system
         self.model = model
         self.max_steps = max_steps
         self.max_tokens = max_tokens
@@ -181,7 +193,7 @@ class OpenAICompatibleAgent:
             for t in session.tools
         ]
         messages: list[dict] = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": self.system},
             {"role": "user", "content": prompt},
         ]
         try:

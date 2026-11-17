@@ -4,6 +4,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from evals.language import NAMES, detect
 from evals.world import Resolver
 from pos_api.timeutil import today
 from pos_mcp.lines import LineError, merge_lines, resolve_day, resolve_line, same_table
@@ -56,9 +57,18 @@ class CaseResult:
     reasons: list[str]
     trajectory: Trajectory
     run: int = 1  # repetition number when a case is run several times
+    language: str | None = None  # language of the request ('tr', 'en')
+    answer_language: str | None = None  # detected language of the final answer, None = unclear
+
+    @property
+    def language_ok(self) -> bool | None:
+        """Did the answer use the request's language? None when it cannot be told."""
+        if not self.language or not self.answer_language:
+            return None
+        return self.answer_language == self.language
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return {**asdict(self), "language_ok": self.language_ok}
 
 
 # --------------------------------------------------------------------------- #
@@ -203,6 +213,11 @@ def canonical_args(tool: str, args: dict[str, Any], resolver: Resolver) -> dict[
     return args
 
 
+def case_language(case: dict[str, Any]) -> str:
+    """The request's language: `lang` in the case, else English for the english category."""
+    return case.get("lang") or ("en" if case["category"] == "english" else "tr")
+
+
 def score(case: dict[str, Any], traj: Trajectory, resolver: Resolver) -> CaseResult:
     reasons: list[str] = []
     if traj.error:
@@ -253,6 +268,15 @@ def score(case: dict[str, Any], traj: Trajectory, resolver: Resolver) -> CaseRes
         elif case.get("ask_about") and not re.search(case["ask_about"], text):
             reasons.append(f"asked, but not about /{case['ask_about']}/")
 
+    # The user must be answered in their own language, whatever language the data is in.
+    language = case_language(case)
+    answer_language = detect(traj.final_text)
+    if answer_language and answer_language != language:
+        reasons.append(
+            f"answered in {NAMES.get(answer_language, answer_language)} "
+            f"to a {NAMES.get(language, language)} request"
+        )
+
     reasons = list(dict.fromkeys(reasons))  # dedupe, keep order
     return CaseResult(
         id=case["id"],
@@ -262,4 +286,6 @@ def score(case: dict[str, Any], traj: Trajectory, resolver: Resolver) -> CaseRes
         tool_ok=tool_ok,
         reasons=reasons,
         trajectory=traj,
+        language=language,
+        answer_language=answer_language,
     )

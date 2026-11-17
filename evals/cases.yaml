@@ -24,6 +24,9 @@
 # `ask: true` cases pass when the final answer asks the user (a "?" or Turkish request
 # phrasing such as "lütfen ... seçin"); `ask_about` is a regex the question must match.
 # Default `forbid` for read-only categories (report, inventory, menu): every write tool.
+# Every case also checks the answer's language (evals/language.py): it must be the
+# request's language (`lang`, default Turkish; English for the english category), even
+# though menu, option and table names stay Turkish. Answers too short to tell are not judged.
 
 world:
   reserved_tables: [Teras 1]
@@ -403,3 +406,36 @@ cases:
     forbid:
       - {tool: create_order, succeeded: true}
       - {tool: add_items_to_order, succeeded: true}
+
+  # English requests that need approval: the preview, the question and the result must
+  # stay in English although the order lines and reasons are Turkish data.
+  - id: en-approve-cancel
+    category: english
+    prompt: Cancel the order on Bahçe 2, the customer left.
+    expect:
+      - tool: cancel_order
+        args:
+          order_id: {open_order: Bahçe 2}
+          reason: {any: true}
+          return_to_stock: {absent_or: false}
+
+  - id: en-approve-void-line
+    category: english
+    prompt: Remove the ayrans from Bahçe 2, they were entered by mistake.
+    expect:
+      - tool: void_order_item
+        args:
+          order_id: {open_order: Bahçe 2}
+          order_item_id: {order_line: [Bahçe 2, Ayran]}
+    forbid:
+      - {tool: cancel_order}
+
+  - id: en-approve-pay-card
+    category: english
+    prompt: Close the bill for Salon 5, paid by card.
+    expect:
+      - tool: pay_order
+        args:
+          order_id: {open_order: Salon 5}
+          method: card
+          discount_percent: {absent_or: 0}
