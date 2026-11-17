@@ -1,0 +1,216 @@
+"""The user's language for what write tools say back.
+
+The menu, option and table names are Turkish data, and a model that copies a result such as
+"OPENED order #12 on Salon 4: 1 x Adana Kebap (Acılı)" into its answer tends to drift into
+Turkish even when the user wrote in English. So every write tool takes `reply_language`, and
+the server writes its summaries, previews and approval questions in that language: the text
+the model is most likely to copy is already in the user's language. This works in every MCP
+client, because tool results always reach the model (server instructions may not).
+
+Turkish and English texts are written out; any other language gets English text plus an
+explicit "answer the user in <language>" line.
+"""
+
+from contextvars import ContextVar
+from typing import Annotated, Any
+
+from pydantic import Field
+
+from pos_api.text import normalize
+
+ReplyLanguage = Annotated[
+    str,
+    Field(
+        description="Language of the user's LATEST message as a code: 'en' if they wrote in "
+        "English, 'tr' in Turkish, 'de' in German... Not the language of the menu or table "
+        "names. The result is written in this language; answer the user in it too.",
+        min_length=2,
+        max_length=20,
+    ),
+]
+
+_ALIASES = {
+    "en": "en",
+    "eng": "en",
+    "english": "en",
+    "ingilizce": "en",
+    "tr": "tr",
+    "tur": "tr",
+    "turkish": "tr",
+    "turkce": "tr",
+    "de": "de",
+    "german": "de",
+    "deutsch": "de",
+    "fr": "fr",
+    "french": "fr",
+    "ru": "ru",
+    "russian": "ru",
+    "ar": "ar",
+    "arabic": "ar",
+    "es": "es",
+    "spanish": "es",
+}
+LANGUAGE_NAMES = {
+    "en": "English",
+    "tr": "Turkish",
+    "de": "German",
+    "fr": "French",
+    "ru": "Russian",
+    "ar": "Arabic",
+    "es": "Spanish",
+}
+
+_current: ContextVar[str] = ContextVar("reply_language", default="en")
+
+
+def code(language: str | None) -> str:
+    """'English' / 'EN' / 'en-US' -> 'en'. Unknown codes are kept ('nl')."""
+    key = normalize(language or "").replace("_", "-").split("-")[0].strip()
+    return _ALIASES.get(key, key or "en")
+
+
+def use(language: str | None) -> str:
+    """Set the reply language for the rest of this tool call; returns its code."""
+    lang = code(language)
+    _current.set(lang)
+    return lang
+
+
+def current() -> str:
+    return _current.get()
+
+
+def name(lang: str | None = None) -> str:
+    lang = lang or current()
+    return LANGUAGE_NAMES.get(lang, lang)
+
+
+def reply_note() -> dict[str, str]:
+    """Put last in every write result: the language to answer in, after the Turkish data."""
+    return {"answer_the_user_in": name()}
+
+
+# --------------------------------------------------------------------------- #
+# Option names: Turkish data, glossed for non-Turkish users ("Acılı (spicy)")
+# --------------------------------------------------------------------------- #
+
+OPTION_GLOSS = {
+    "acili": "spicy",
+    "az acili": "mild",
+    "acisiz": "not spicy",
+    "buyuk boy": "large",
+    "1.5 porsiyon": "1.5 portions",
+    "ekstra kasar": "extra cheese",
+    "ekstra yumurta": "extra egg",
+}
+
+
+def options(text: str) -> str:
+    """'Acılı, Büyük Boy' -> 'Acılı = spicy, Büyük Boy = large' unless replying in Turkish."""
+    if current() == "tr" or not text:
+        return text
+    out = []
+    for part in (p.strip() for p in text.split(",")):
+        gloss = OPTION_GLOSS.get(normalize(part))
+        out.append(f"{part} = {gloss}" if gloss else part)
+    return ", ".join(out)
+
+
+# --------------------------------------------------------------------------- #
+# Sentences
+# --------------------------------------------------------------------------- #
+
+_TEXT: dict[str, dict[str, str]] = {
+    "opened_table": {
+        "en": "OPENED order #{order_id} on {table}: {lines}",
+        "tr": "AÇILDI: {table} için #{order_id} numaralı sipariş: {lines}",
+    },
+    "added_table": {
+        "en": "ADDED to {table}'s open order #{order_id}: {lines}",
+        "tr": "EKLENDİ: {table} masasının açık siparişine (#{order_id}): {lines}",
+    },
+    "opened_channel": {
+        "en": "OPENED {channel} order #{order_id}: {lines}",
+        "tr": "AÇILDI: #{order_id} numaralı {channel} siparişi: {lines}",
+    },
+    "added_order": {
+        "en": "ADDED to order #{order_id} ({where}): {lines}",
+        "tr": "EKLENDİ: #{order_id} numaralı siparişe ({where}): {lines}",
+    },
+    "order_total": {"en": "Order total {total}.", "tr": "Sipariş toplamı {total}."},
+    "table_status": {
+        "en": "{table} is now {status}.",
+        "tr": "{table} artık {status}.",
+    },
+    "status_free": {"en": "free", "tr": "boş"},
+    "status_reserved": {
+        "en": "reserved (no time or guest name is stored)",
+        "tr": "rezerve (saat ve misafir adı tutulmuyor)",
+    },
+    # previews
+    "void_preview": {
+        "en": "Void {line} on order #{order_id} ({where}). Reason: {reason}.",
+        "tr": "#{order_id} numaralı siparişten ({where}) {line} iptal edilecek. Sebep: {reason}.",
+    },
+    "cancel_preview": {
+        "en": "Cancel order #{order_id} ({where}, {count} lines, {total}). Reason: {reason}.",
+        "tr": "#{order_id} numaralı sipariş ({where}, {count} satır, {total}) iptal edilecek. "
+        "Sebep: {reason}.",
+    },
+    "pay_preview": {
+        "en": "Close order #{order_id} ({where}): charge {due} by {method}",
+        "tr": "#{order_id} numaralı sipariş ({where}) kapatılacak: {method} ile {due} alınacak",
+    },
+    "pay_discount": {
+        "en": " after {percent}% discount ({reason})",
+        "tr": " (%{percent} indirim sonrası; sebep: {reason})",
+    },
+    "purchase_preview": {
+        "en": "Add {quantity} {unit} of {ingredient} to stock. Note: {note}",
+        "tr": "Stoğa {quantity} {unit} {ingredient} eklenecek. Not: {note}",
+    },
+    "stock_back": {
+        "en": " Ingredients go back to stock.",
+        "tr": " Malzemeler stoğa geri eklenecek.",
+    },
+    "stock_kept": {"en": " Stock is not returned.", "tr": " Stok geri eklenmeyecek."},
+    "ask_approval": {
+        "en": "Do you approve? (yes / no)",
+        "tr": "Onaylıyor musunuz? (evet / hayır)",
+    },
+    # results of approved actions
+    "voided": {
+        "en": "VOIDED {line} on order #{order_id} ({where}). {total_text}",
+        "tr": "İPTAL EDİLDİ: #{order_id} numaralı siparişten ({where}) {line}. {total_text}",
+    },
+    "cancelled": {
+        "en": "CANCELLED order #{order_id} ({where}). Reason: {reason}.",
+        "tr": "İPTAL EDİLDİ: #{order_id} numaralı sipariş ({where}). Sebep: {reason}.",
+    },
+    "paid": {
+        "en": "PAID and closed order #{order_id} ({where}): {total} by {method}.",
+        "tr": "ÖDENDİ ve kapatıldı: #{order_id} numaralı sipariş ({where}), {method} ile {total}.",
+    },
+    "purchased": {
+        "en": "RECORDED: {quantity} {unit} of {ingredient} added to stock; now {stock} {unit}.",
+        "tr": "KAYDEDİLDİ: stoğa {quantity} {unit} {ingredient} eklendi; şimdi {stock} {unit}.",
+    },
+    "method_cash": {"en": "cash", "tr": "nakit"},
+    "method_card": {"en": "card", "tr": "kart"},
+    "method_online": {"en": "online payment", "tr": "online ödeme"},
+    "channel_takeaway": {"en": "takeaway", "tr": "paket servis"},
+    "channel_delivery": {"en": "delivery", "tr": "kurye"},
+    "channel_dine_in": {"en": "dine-in", "tr": "masa"},
+}
+
+
+def t(key: str, **values: Any) -> str:
+    """The sentence in the current language (English for languages without a text)."""
+    texts = _TEXT[key]
+    return texts.get(current(), texts["en"]).format(**values)
+
+
+def word(key: str, value: str) -> str:
+    """t() for single words such as payment methods; unknown values pass through."""
+    full = f"{key}_{value}"
+    return t(full) if full in _TEXT else value

@@ -10,7 +10,15 @@ from evals.agent import system_prompt
 from evals.harness import ToolSession
 from evals.language import detect
 from evals.run import load_cases, run_cases, select_cases, summary_markdown
-from evals.scoring import MISSING, ToolCall, Trajectory, match, score
+from evals.scoring import (
+    MISSING,
+    WRITE_TOOLS,
+    ToolCall,
+    Trajectory,
+    case_language,
+    match,
+    score,
+)
 from evals.world import Resolver, build_world, sqlite_engine
 from pos_mcp.server import INSTRUCTIONS
 
@@ -47,7 +55,10 @@ class ScriptedAgent:
     async def run(self, prompt: str, session: ToolSession) -> Trajectory:
         case_id = next(c["id"] for c in SPEC["cases"] if c["prompt"] == prompt)
         calls, final_text = self.plans[case_id](self.resolver)
+        case = next(c for c in SPEC["cases"] if c["id"] == case_id)
         for tool, args in calls:
+            if tool in WRITE_TOOLS:  # a model that says the user's language, as asked
+                args = {"reply_language": case_language(case), **args}
             await session.call(tool, args)
         return Trajectory(
             calls=list(session.calls),
@@ -265,9 +276,11 @@ def test_every_reference_in_the_cases_resolves(resolver):
 async def test_correct_agent_passes(resolver, tmp_path):
     results = await _run(GOOD, resolver, tmp_path)
     assert {i: res.reasons for i, res in results.items() if not res.passed} == {}
-    # the simulated user was asked to approve the cancellation, with the stock note
+    # the simulated user was asked to approve the cancellation, with the stock note, in
+    # the request's language (Turkish here)
     approvals = results["approve-cancel-restock"].trajectory.approvals_asked
-    assert len(approvals) == 1 and "back to stock" in approvals[0]
+    assert len(approvals) == 1 and "stoğa geri eklenecek" in approvals[0]
+    assert "Onaylıyor musunuz?" in approvals[0]
 
 
 async def test_wrong_agent_fails_for_the_right_reasons(resolver, tmp_path):

@@ -41,6 +41,7 @@ from mcp.server.mcpserver.resolve import Elicit
 from pydantic import BaseModel, Field
 
 from pos_api.text import normalize
+from pos_mcp import i18n
 
 TOKEN_TTL_SECONDS = 300
 
@@ -116,10 +117,12 @@ def _issue(action: str, args: dict[str, Any], preview: str, why: str | None) -> 
     response: dict[str, Any] = {
         "status": "confirmation_required",
         "preview": preview,
+        "ask_user": i18n.t("ask_approval"),
         "confirmation_token": token,
         "message": "NOTHING HAS BEEN CHANGED YET. Show this preview to the user and ask "
-        "for explicit approval. Only if they approve, call this tool again with the same "
-        "arguments plus this confirmation_token and user_reply = their reply, word for word.",
+        f"for explicit approval, in {i18n.name()}. Only if they approve, call this tool again "
+        "with the same arguments plus this confirmation_token and user_reply = their reply, "
+        "word for word.",
     }
     if why:
         response["status"] = "confirmation_invalid"
@@ -128,17 +131,18 @@ def _issue(action: str, args: dict[str, Any], preview: str, why: str | None) -> 
             "show it to the user and ask again. Only if they approve, call this tool again "
             "with the same arguments plus the NEW confirmation_token."
         )
+    response.update(i18n.reply_note())
     return Gate(response)
 
 
 # Normalized words. A refusal anywhere wins over a yes ("evet, ama iptal etme" = no).
 _NO = re.compile(
     r"\b(hayir|yok|etme|yapma|vazgec|dur|bekle|no|nope|dont|don't|do not|not|"
-    r"never|stop|wait|cancel that)\b"
+    r"never|stop|wait|cancel that|nein|non|nicht)\b"
 )
 _YES = re.compile(
     r"\b(evet|onay\w*|tamam|olur|peki|kabul|yap|yes|yep|yeah|ok|okay|confirm\w*|"
-    r"approve\w*|sure|go ahead|do it|proceed)\b"
+    r"approve\w*|sure|go ahead|do it|proceed|ja|oui)\b"
 )
 
 
@@ -189,7 +193,7 @@ def gate(
         return Gate()
 
     if _supports_elicitation(ctx):
-        return Elicit(f"{preview}\n\nApprove?", Approval)
+        return Elicit(f"{preview}\n\n{i18n.t('ask_approval')}", Approval)
 
     return _issue(action, args, preview, None)
 
@@ -197,8 +201,8 @@ def gate(
 def blocked(outcome: ElicitationResult[Any]) -> dict[str, Any] | None:
     """None if the action may run, otherwise the response to return to the model."""
     if not isinstance(outcome, AcceptedElicitation):
-        return DECLINED
+        return {**DECLINED, **i18n.reply_note()}
     data = outcome.data
     if isinstance(data, Gate):
         return data.response
-    return None if data.approve else DECLINED
+    return None if data.approve else {**DECLINED, **i18n.reply_note()}
