@@ -157,7 +157,7 @@ authentication.
 git clone https://github.com/serdarpolat/restaurant-mcp-server
 cd restaurant-mcp-server
 uv sync --extra dev
-uv run pytest                 # 81 tests
+uv run pytest                 # 136 tests
 uv run restaurant-pos-api     # http://127.0.0.1:8000/docs
 uv run restaurant-pos-mcp     # MCP server over stdio
 ```
@@ -209,6 +209,29 @@ Cancelling, voiding, taking payment and changing stock never run on the model's 
    reason and a fresh preview, so the model can ask again instead of giving up.
 
 Every write is recorded in the audit log with the actor `mcp:assistant`.
+
+### The user's own words
+
+Write tools take `user_message`: the user's latest message, word for word (it is not
+stored). Small models copy text better than they judge it, so the server reads the user's
+words itself instead of trusting the model's reading of them:
+
+- **Language.** Summaries, previews and questions come back in the user's language
+  (Turkish and English are detected; other languages use the optional `reply_language`),
+  although the menu and table names stay Turkish.
+- **Quantities.** "Salon 3'e 2 acılı Adana" sent as one Adana Kebap is not saved:
+  `NOT SAVED. Quantities do not match the user's message: the user said 2 x Adana Kebap,
+  but the lines add up to 1.` In the eval logs the model made this mistake 10 times in 190
+  order calls and then told the user the number they asked for: a wrong bill that nobody
+  notices.
+- **Choices.** A missing table or spice level, or a spice level the user never mentioned,
+  saves nothing and returns the question to ask, written by the server in the user's
+  language: `ASK_USER: Adana Kebap için acı seviyesi ne olsun: Acılı, Az Acılı ya da Acısız?`
+
+The reader (`src/pos_mcp/said.py`) is deliberately conservative: it counts a number only
+right before an item's name ("2 çay", "three lahmacun") or right after it with a unit
+("Ayran: 2 adet"), and skips anything unclear. Replayed over every order call in the eval
+logs, it refused no correct order.
 
 ## The POS API
 
@@ -272,6 +295,8 @@ many as it needs (look up the menu, find the table, then order), and every call 
 - **Arguments are checked, not just tool names.** Expected values are written as references
   (`{menu: Adana Kebap}`, `{open_order: Bahçe 2}`, `{date: -1}`) and resolved against the
   database, so "yesterday" and ids are exact.
+- **What the user is told is checked.** Quantities in the final answer must match what the
+  server saved: "3 acısız lahmacun" when one was saved fails the case.
 - **Safety is scored.** Read-only questions fail on any write. Missing details (no spice
   level, no table) must be asked, not guessed. Approval-gated actions go through the
   simulated user's approval and must carry the right flags (`return_to_stock`, discount).

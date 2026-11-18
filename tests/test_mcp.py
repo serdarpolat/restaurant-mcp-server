@@ -112,7 +112,9 @@ async def test_api_errors_reach_the_model_with_recovery_hints(pos_api):
         )
     assert result.is_error
     message = result.content[0].text
-    assert "Acı Seviyesi" in message and "Acısız" in message
+    # a missing required choice is a question for the user, written by the server
+    assert "NOT SAVED" in message and "ASK_USER: Spice level for the Adana Kebap" in message
+    assert "Acısız (not spicy)" in message
 
 
 async def test_cancel_needs_token_and_token_is_bound_to_arguments(pos_api):
@@ -656,8 +658,8 @@ async def test_approval_rule_is_in_the_tool_descriptions(pos_api):
         tools = {t.name: t for t in (await client.list_tools()).tools}
     for name in ("void_order_item", "cancel_order", "pay_order", "record_stock_purchase"):
         assert "do not ask the user to confirm first" in tools[name].description, name
-    assert "ask which table" in tools["create_order"].description
-    assert "do not choose one" in tools["create_order"].description
+    assert "ASK_USER" in tools["create_order"].description
+    assert "do not choose for them" in tools["create_order"].description
 
 
 def test_language_codes_and_neutral_instructions():
@@ -679,3 +681,167 @@ def test_language_codes_and_neutral_instructions():
     # the language rule names both directions, not only "Turkish -> Turkish"
     assert "English -> English" in INSTRUCTIONS and "Türkçe -> Türkçe" in INSTRUCTIONS
     assert "Turkish message -> Turkish answer" not in INSTRUCTIONS
+
+
+# --------------------------------------------------------------------------- #
+# v6.5: the server holds order lines against the user's own words
+# --------------------------------------------------------------------------- #
+
+
+async def _open_orders(client, table: str) -> int | None:
+    tables = data(await client.call_tool("list_tables", {}))
+    return next(t["open_order_id"] for t in tables if t["name"] == table)
+
+
+async def test_a_quantity_the_user_did_not_say_is_not_saved(pos_api):
+    async with Client(mcp) as client:
+        result, text = await call(
+            client,
+            "create_order",
+            {
+                "table_name": "Salon 3",
+                "items": [
+                    {"name": "Adana Kebap", "quantity": 1, "options": ["Acılı"]},
+                    {"name": "Ayran", "quantity": 2},
+                ],
+                "user_message": "Salon 3'e 2 acılı Adana ve 2 ayran aç.",
+            },
+        )
+        assert result.is_error and "NOT SAVED. Quantities do not match" in text
+        assert "the user said 2 x Adana Kebap, but the lines add up to 1" in text
+        assert "Ayran" not in text  # its quantity was right
+        assert await _open_orders(client, "Salon 3") is None  # nothing was opened
+        fixed = data(
+            await client.call_tool(
+                "create_order",
+                {
+                    "table_name": "Salon 3",
+                    "items": [
+                        {"name": "Adana Kebap", "quantity": 2, "options": ["Acılı"]},
+                        {"name": "Ayran", "quantity": 2},
+                    ],
+                    "user_message": "Salon 3'e 2 acılı Adana ve 2 ayran aç.",
+                },
+            )
+        )
+    assert "2 x Adana Kebap (Acılı), 2 x Ayran" in fixed["summary"]
+
+
+async def test_lines_with_different_options_add_up_to_what_the_user_said(pos_api):
+    message = "Start an order on Salon 4: two Adana kebabs, one spicy and one not spicy."
+    split = [
+        {"name": "Adana Kebap", "quantity": 1, "options": ["spicy"]},
+        {"name": "Adana Kebap", "quantity": 1, "options": ["not spicy"]},
+    ]
+    async with Client(mcp) as client:
+        ok = data(
+            await client.call_tool(
+                "create_order", {"table_name": "Salon 4", "items": split, "user_message": message}
+            )
+        )
+        three, text = await call(
+            client,
+            "create_order",
+            {
+                "table_name": "Salon 4",
+                "items": [*split, {"name": "Adana Kebap", "quantity": 1, "options": ["mild"]}],
+                "user_message": message,
+            },
+        )
+    assert ok["summary"].startswith("OPENED order")
+    assert three.is_error and "said 2 x Adana Kebap, but the lines add up to 3" in text
+
+
+async def test_a_missing_table_is_asked_by_the_server_in_the_users_language(pos_api):
+    async with Client(mcp) as client:
+        tr, tr_text = await call(
+            client,
+            "create_order",
+            {"items": [{"name": "Kola", "quantity": 2}], "user_message": "2 kola ekle."},
+        )
+        en, en_text = await call(
+            client,
+            "add_items_to_order",
+            {
+                "table_name": "?",
+                "items": [{"name": "Kola", "quantity": 2}],
+                "user_message": "Add two colas.",
+            },
+        )
+    assert tr.is_error and "ASK_USER: Hangi masa için?" in tr_text
+    assert tr_text.endswith("(Answer the user in Turkish.)")
+    assert en.is_error and "ASK_USER: Which table is this for?" in en_text
+
+
+async def test_a_spice_level_the_user_did_not_give_is_asked_not_chosen(pos_api):
+    async with Client(mcp) as client:
+        # the model chose 'Acılı' although the user did not say how spicy
+        guessed, tr_text = await call(
+            client,
+            "create_order",
+            {
+                "table_name": "Salon 4",
+                "items": [{"name": "Adana Kebap", "options": ["Acılı"]}],
+                "user_message": "Salon 4'e 1 Adana Kebap.",
+            },
+        )
+        assert await _open_orders(client, "Salon 4") is None
+        missing, en_text = await call(
+            client,
+            "create_order",
+            {
+                "table_name": "Salon 4",
+                "items": [{"name": "Adana Kebap", "quantity": 2}],
+                "user_message": "Open two Adana kebabs on Salon 4.",
+            },
+        )
+        # the user's answer to the question names no item: it is not second-guessed
+        answered = data(
+            await client.call_tool(
+                "create_order",
+                {
+                    "table_name": "Salon 4",
+                    "items": [{"name": "Adana Kebap", "options": ["Acılı"]}],
+                    "user_message": "acılı olsun",
+                },
+            )
+        )
+    assert guessed.is_error
+    assert "ASK_USER: Adana Kebap için acı seviyesi ne olsun: Acılı, Az Acılı ya da Acısız?" in (
+        tr_text
+    )
+    assert missing.is_error
+    assert (
+        "ASK_USER: Spice level for the 2 Adana Kebap: Acılı (spicy), Az Acılı (mild) or "
+        "Acısız (not spicy)? (If they differ, say e.g. 'one Acılı, one Acısız'.)" in en_text
+    )
+    assert answered["summary"].startswith("AÇILDI")
+
+
+async def test_table_and_spice_are_asked_together(pos_api):
+    async with Client(mcp) as client:
+        result, text = await call(
+            client,
+            "create_order",
+            {"items": [{"name": "Beyti"}], "user_message": "bir Beyti aç"},
+        )
+    assert result.is_error
+    question = text.split("ASK_USER: ")[1]
+    assert question.startswith("Hangi masa için?") and "Beyti için acı seviyesi" in question
+
+
+async def test_options_in_other_languages_are_not_second_guessed(pos_api):
+    """The server reads Turkish and English; in other languages the model's choice stands."""
+    async with Client(mcp) as client:
+        order = data(
+            await client.call_tool(
+                "create_order",
+                {
+                    "channel": "takeaway",
+                    "items": [{"name": "Adana Kebap", "options": ["spicy"]}],
+                    "user_message": "Einmal Adana scharf zum Mitnehmen",
+                    "reply_language": "de",
+                },
+            )
+        )
+    assert order["summary"].startswith("OPENED takeaway order")

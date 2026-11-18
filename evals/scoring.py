@@ -1,6 +1,8 @@
 """Score an agent's tool calls against a case from cases.yaml. Pure functions, no I/O."""
 
+import json
 import re
+from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -8,6 +10,7 @@ from evals.language import NAMES, detect
 from evals.world import Resolver
 from pos_api.timeutil import today
 from pos_mcp.lines import LineError, merge_lines, resolve_day, resolve_line, same_table
+from pos_mcp.said import quantity_mentions
 
 WRITE_TOOLS = frozenset(
     {
@@ -59,6 +62,7 @@ class CaseResult:
     run: int = 1  # repetition number when a case is run several times
     language: str | None = None  # language of the request ('tr', 'en')
     answer_language: str | None = None  # detected language of the final answer, None = unclear
+    answer_matches_saved: bool | None = None  # quantities in the answer = what was saved
 
     @property
     def language_ok(self) -> bool | None:
@@ -218,6 +222,64 @@ def case_language(case: dict[str, Any]) -> str:
     return case.get("lang") or ("en" if case["category"] == "english" else "tr")
 
 
+ORDER_TOOLS = ("create_order", "add_items_to_order")
+
+
+def saved_quantities(traj: Trajectory) -> dict[str, set[int]]:
+    """Per item name, the numbers an honest answer may give, from the server's own results:
+    each saved line, what one call added (its summary), and the order's total."""
+    allowed: dict[str, set[int]] = defaultdict(set)
+    for call in traj.calls:
+        if call.tool not in ORDER_TOOLS or call.is_error:
+            continue
+        try:
+            order = json.loads(call.result)
+        except (TypeError, ValueError):
+            continue
+        totals: Counter[str] = Counter()
+        for line in order.get("items") or []:
+            if line.get("status", "active") != "active":
+                continue
+            totals[line["name"]] += line["quantity"]
+            allowed[line["name"]].add(line["quantity"])
+        for name, total in totals.items():
+            allowed[name].add(total)
+        names = dict(enumerate(totals))
+        added: Counter[str] = Counter()
+        for item, value in quantity_mentions(order.get("summary", ""), names):
+            added[names[item]] += value
+        for name, value in added.items():
+            allowed[name].add(value)
+    return allowed
+
+
+def answer_vs_saved(
+    traj: Trajectory, resolver: Resolver, language: str
+) -> tuple[bool | None, list[str]]:
+    """Does the final answer tell the user the quantities that were actually saved?
+
+    The silent error this catches: the server saved 1 x Lahmacun, the model's answer says
+    "3 acısız lahmacun". None when nothing was ordered or the answer states no quantities.
+    """
+    allowed = saved_quantities(traj)
+    if not allowed:
+        return None, []
+    names = dict(enumerate(allowed))
+    tables = [t["name"] for t in resolver.tables()]
+    said: dict[str, list[int]] = defaultdict(list)
+    for item, value in quantity_mentions(traj.final_text, names, tables, language):
+        said[names[item]].append(value)
+    if not said:
+        return None, []
+    reasons = []
+    for name, values in said.items():
+        ok = all(v in allowed[name] for v in values) or sum(values) in allowed[name]
+        if not ok:
+            saved = " or ".join(map(str, sorted(allowed[name])))
+            reasons.append(f"answer says {sum(values)} x {name}, but {saved} was saved")
+    return not reasons, reasons
+
+
 def score(case: dict[str, Any], traj: Trajectory, resolver: Resolver) -> CaseResult:
     reasons: list[str] = []
     if traj.error:
@@ -277,6 +339,10 @@ def score(case: dict[str, Any], traj: Trajectory, resolver: Resolver) -> CaseRes
             f"to a {NAMES.get(language, language)} request"
         )
 
+    # What the user is told must be what was saved (a wrong count is a wrong bill).
+    answer_matches_saved, mismatches = answer_vs_saved(traj, resolver, language)
+    reasons += mismatches
+
     reasons = list(dict.fromkeys(reasons))  # dedupe, keep order
     return CaseResult(
         id=case["id"],
@@ -288,4 +354,5 @@ def score(case: dict[str, Any], traj: Trajectory, resolver: Resolver) -> CaseRes
         trajectory=traj,
         language=language,
         answer_language=answer_language,
+        answer_matches_saved=answer_matches_saved,
     )

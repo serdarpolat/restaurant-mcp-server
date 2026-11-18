@@ -124,6 +124,45 @@ OPTION_GLOSS = {
 }
 
 
+GROUP_GLOSS = {
+    "aci seviyesi": "Spice level",
+    "porsiyon": "Portion",
+    "boy": "Size",
+    "pide ekstralari": "Extras",
+}
+
+
+def _turkish_lower(text: str) -> str:
+    return text.replace("I", "ı").replace("İ", "i").lower()
+
+
+def ask_option(item: str, group: dict[str, Any], quantity: int = 1) -> str:
+    """'Adana Kebap için acı seviyesi ne olsun: Acılı, Az Acılı ya da Acısız?' /
+    'Spice level for the Adana Kebap: Acılı (spicy), Az Acılı (mild) or Acısız (not spicy)?'"""
+    turkish = current() == "tr"
+    names = [m["name"] for m in group["modifiers"]]
+    shown = (
+        names
+        if turkish
+        else [
+            f"{n} ({OPTION_GLOSS[normalize(n)]})" if normalize(n) in OPTION_GLOSS else n
+            for n in names
+        ]
+    )
+    choices = shown[0] if len(shown) == 1 else f"{', '.join(shown[:-1])} {t('or')} {shown[-1]}"
+    label = (
+        _turkish_lower(group["name"])
+        if turkish
+        else GROUP_GLOSS.get(normalize(group["name"]), group["name"])
+    )
+    if quantity > 1:
+        item = f"{quantity} {item}"
+    text = t("ask_option", item=item, group=label, choices=choices)
+    if quantity > 1 and len(names) > 1:
+        text += t("ask_split", first=names[0], second=names[-1])
+    return text
+
+
 def options(text: str) -> str:
     """'Acılı, Büyük Boy' -> 'Acılı = spicy, Büyük Boy = large' unless replying in Turkish."""
     if current() == "tr" or not text:
@@ -214,6 +253,20 @@ _TEXT: dict[str, dict[str, str]] = {
         "en": "RECORDED: {quantity} {unit} of {ingredient} added to stock; now {stock} {unit}.",
         "tr": "KAYDEDİLDİ: stoğa {quantity} {unit} {ingredient} eklendi; şimdi {stock} {unit}.",
     },
+    # questions the server writes for the user (missing table or required choice)
+    "ask_table": {
+        "en": "Which table is this for? (Or is it takeaway or delivery?)",
+        "tr": "Hangi masa için? (Paket servis ya da kurye ise onu söyleyin.)",
+    },
+    "ask_option": {
+        "en": "{group} for the {item}: {choices}?",
+        "tr": "{item} için {group} ne olsun: {choices}?",
+    },
+    "ask_split": {
+        "en": " (If they differ, say e.g. 'one {first}, one {second}'.)",
+        "tr": " (Farklı olacaksa söyleyin, örn. '1 {first}, 1 {second}'.)",
+    },
+    "or": {"en": "or", "tr": "ya da"},
     "method_cash": {"en": "cash", "tr": "nakit"},
     "method_card": {"en": "card", "tr": "kart"},
     "method_online": {"en": "online payment", "tr": "online ödeme"},

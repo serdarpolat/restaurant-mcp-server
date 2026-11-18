@@ -124,6 +124,11 @@ def _language(results: list[CaseResult]) -> str:
     return f"{sum(known)}/{len(known)}" if known else "-"
 
 
+def _saved(results: list[CaseResult]) -> str:
+    known = [r.answer_matches_saved for r in results if r.answer_matches_saved is not None]
+    return f"{sum(known)}/{len(known)}" if known else "-"
+
+
 def summary_markdown(
     model: str, results: list[CaseResult], server_instructions: bool = True
 ) -> str:
@@ -144,8 +149,8 @@ def summary_markdown(
         "",
         header,
         "",
-        "| Category | Cases | Passed | Right tool | Right language |",
-        "|---|---:|---:|---:|---:|",
+        "| Category | Cases | Passed | Right tool | Right language | Answer = saved |",
+        "|---|---:|---:|---:|---:|---:|",
     ]
     for cat in order:
         rs = by_cat[cat]
@@ -153,20 +158,22 @@ def summary_markdown(
         tool_ok = sum(r.tool_ok for r in rs)
         lines.append(
             f"| {cat} | {len(rs) // runs} | {passed}/{len(rs)} ({_pct(passed, len(rs))}) "
-            f"| {_pct(tool_ok, len(rs))} | {_language(rs)} |"
+            f"| {_pct(tool_ok, len(rs))} | {_language(rs)} | {_saved(rs)} |"
         )
     passed = sum(r.passed for r in results)
     tool_ok = sum(r.tool_ok for r in results)
     lines.append(
         f"| **total** | **{len(case_ids)}** | **{passed}/{len(results)} "
         f"({_pct(passed, len(results))})** | **{_pct(tool_ok, len(results))}** "
-        f"| **{_language(results)}** |"
+        f"| **{_language(results)}** | **{_saved(results)}** |"
     )
     lines += [
         "",
         (
             "Right language: answers in the request's language, of those whose language is "
-            'clear (very short answers such as "İskender 620 TL." are not counted).'
+            'clear (very short answers such as "İskender 620 TL." are not counted). '
+            "Answer = saved: of the answers that state quantities of an order the agent "
+            "placed, those whose quantities match what the server saved."
         ),
     ]
 

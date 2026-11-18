@@ -1,6 +1,7 @@
 """The eval harness itself, tested without any model or network: a scripted agent plays the
 role of the LLM, so we know exactly which cases must pass and which must fail."""
 
+import json
 from collections.abc import Callable
 
 import pytest
@@ -288,7 +289,11 @@ async def test_wrong_agent_fails_for_the_right_reasons(resolver, tmp_path):
     assert "date_from" in results["report-top5-yesterday"].reasons[0]
     assert "modifier_ids" in results["write-new-dine-in"].reasons[0]
     assert "return_to_stock" in results["approve-cancel-restock"].reasons[0]
-    assert any("forbidden call" in x for x in results["ask-spice-adana"].reasons)
+    # guessing the spice level no longer gets saved: the server asks instead (v6.5); the
+    # agent still fails because it did not pass the question on
+    spice = results["ask-spice-adana"]
+    assert spice.reasons == ["did not ask the user for the missing information"]
+    assert "ASK_USER" in spice.trajectory.calls[0].result
     assert results["report-top5-yesterday"].tool_ok  # right tool, wrong arguments
 
     md = summary_markdown("scripted", list(results.values()))
@@ -552,3 +557,33 @@ def test_the_server_tells_the_language_of_every_eval_request():
 
     wrong = [c["prompt"] for c in SPEC["cases"] if detect_message(c["prompt"]) != case_language(c)]
     assert wrong == []
+
+
+def test_answer_must_state_what_was_saved(resolver):
+    """The silent error: 1 x Lahmacun saved, the answer says 3."""
+    from evals.scoring import ToolCall, Trajectory, answer_vs_saved
+
+    saved = {
+        "summary": "AÇILDI: #12 numaralı paket servis siparişi: 1 x Lahmacun (Acısız), "
+        "1 x Şalgam. Sipariş toplamı 220.00 TRY.",
+        "items": [
+            {"name": "Lahmacun", "quantity": 1, "status": "active"},
+            {"name": "Şalgam", "quantity": 1, "status": "active"},
+        ],
+    }
+    call = ToolCall("create_order", {}, False, json.dumps(saved, ensure_ascii=False))
+
+    def check(answer):
+        return answer_vs_saved(Trajectory(calls=[call], final_text=answer), resolver, "tr")
+
+    assert check("Sipariş #12 açıldı: 3 adet acısız lahmacun ve 1 şalgam.") == (
+        False,
+        ["answer says 3 x Lahmacun, but 1 was saved"],
+    )
+    assert check("Sipariş #12 açıldı: 1 acısız lahmacun ve 1 şalgam. 1 x Lahmacun.") == (True, [])
+    assert check("Sipariş #12 açıldı.") == (None, [])  # no quantities stated
+    failed = ToolCall("create_order", {}, True, "NOT SAVED. ...")
+    assert answer_vs_saved(Trajectory(calls=[failed], final_text="3 lahmacun"), resolver, "tr") == (
+        None,
+        [],
+    )

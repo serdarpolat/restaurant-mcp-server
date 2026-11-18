@@ -25,6 +25,7 @@ from pos_mcp import api, i18n
 from pos_mcp.confirmation import Approval, Gate, blocked, gate
 from pos_mcp.i18n import ReplyLanguage, UserMessage
 from pos_mcp.lines import (
+    OPTION_ALIASES,
     LineError,
     merge_lines,
     resolve_day,
@@ -32,6 +33,7 @@ from pos_mcp.lines import (
     resolve_line,
     same_table,
 )
+from pos_mcp.said import mentions, quantities, speaks_of_group
 
 RESTAURANT_TZ = ZoneInfo(os.getenv("RESTAURANT_TZ", "Europe/Istanbul"))
 
@@ -53,14 +55,16 @@ write in any language.
   get_order(table_name=...).
 - Ordering for a table: create_order or add_items_to_order with the table the user named.
   The server adds to that table's open order or opens one. Never use another table.
-  Takeaway and delivery have no table. If the user named no table and did not say
-  takeaway or delivery, ask which table.
-- Options: use every option the user said. If a REQUIRED option (e.g. the spice level) is
-  missing, ask; never choose for the user, and never ask about optional ones. Different
-  options for units = separate lines (one spicy + one not spicy = two lines).
+  Takeaway and delivery have no table.
+- Send the user's own quantities and every option they said. Never choose a REQUIRED option
+  (e.g. the spice level) and never ask about optional ones. Different options for units =
+  separate lines (one spicy + one not spicy = two lines).
+- Missing table or required option: call the write tool anyway with what the user said.
+  Nothing is saved; it returns ASK_USER, the question in the user's language. Ask it, wait.
 - Removing a line = void_order_item; a whole order = cancel_order. add_items only adds.
 - Errors and "NOT SAVED" mean nothing changed: fix the call from the error's hint and the
-  user's own words, and retry. If you still cannot, say so; never make up numbers or results.
+  user's own words, and retry (after ASK_USER: wait for the user). If you still cannot,
+  say so; never make up numbers or results.
   Report an order, payment or cancellation only with the id a tool result returned.
 - Cancel, void, pay and stock purchases need approval: call the tool directly, it asks the
   user. If it returns a preview, show it and wait. Call again with the token and user_reply
@@ -162,9 +166,18 @@ class OrderLine(BaseModel):
 Items = Annotated[list[OrderLine], Field(min_length=1)]
 
 
-async def _lines(items: list[OrderLine]) -> list[dict[str, Any]]:
-    """Resolve names and option names to ids; refuse lines whose name and id disagree."""
+async def _lines(
+    items: list[OrderLine], user_message: str, *, table_missing: bool = False
+) -> list[dict[str, Any]]:
+    """Resolve names and option names to ids; refuse lines whose name and id disagree.
+
+    Then hold the lines against the user's own words (said.py) before anything is saved:
+    a quantity the user stated must be the quantity sent, and a required choice (the spice
+    level) must come from the user. A missing choice or table is not an error to fix but a
+    question for the user: the server writes it, in the user's language.
+    """
     menu = await api.get("/menu/items")
+    tables = [t["name"] for t in await api.get("/tables")]
     details: dict[int, dict[str, Any]] = {}
     out = []
     for n, line in enumerate(items, 1):
@@ -177,7 +190,87 @@ async def _lines(items: list[OrderLine]) -> list[dict[str, Any]]:
         except LineError as exc:
             where = f"Line {n} ('{line.name}')" if len(items) > 1 else f"'{line.name}'"
             raise _refuse(f"{where}: {exc}") from None
-    return merge_lines(out)
+    lines = merge_lines(out)
+    _check_quantities(lines, details, user_message, tables)
+    questions = [i18n.t("ask_table")] if table_missing else []
+    questions += _choices_to_ask(lines, details, user_message, tables)
+    if questions:
+        raise _ask(questions)
+    return lines
+
+
+def _check_quantities(
+    lines: list[dict[str, Any]],
+    details: dict[int, dict[str, Any]],
+    user_message: str,
+    tables: list[str],
+) -> None:
+    """'Salon 3'e 2 Adana' sent as 1 x Adana: refuse, naming both numbers."""
+    names = {line["menu_item_id"]: details[line["menu_item_id"]]["name"] for line in lines}
+    said = quantities(user_message, names, tables, lang=i18n.current())
+    wrong = []
+    for item_id, wanted in said.items():
+        sent = sum(line["quantity"] for line in lines if line["menu_item_id"] == item_id)
+        if sent != wanted:
+            wrong.append(
+                f"the user said {wanted} x {names[item_id]}, but the lines add up to {sent}"
+            )
+    if wrong:
+        raise _refuse(
+            "Quantities do not match the user's message: "
+            + "; ".join(wrong)
+            + ". Send the quantity the user said (lines of one item with different options "
+            "must add up to it), all in one call."
+        )
+
+
+def _choices_to_ask(
+    lines: list[dict[str, Any]],
+    details: dict[int, dict[str, Any]],
+    user_message: str,
+    tables: list[str],
+) -> list[str]:
+    """Questions for required choices the user has not made.
+
+    A required group (min_select > 0) with nothing chosen, or with a choice although the
+    user's message names the item and says nothing about that group ("Salon 4'e 1 Adana"
+    sent as 'Acılı'): the model chose for the user. Answers to an earlier question
+    ("acılı", "evet") do not name the item, so they are not second-guessed.
+    """
+    questions: list[str] = []
+    asked: set[tuple[int, str]] = set()
+    for line in lines:
+        detail = details[line["menu_item_id"]]
+        # Only where the server can read the user's words (Turkish, English).
+        named = i18n.current() in ("tr", "en") and mentions(user_message, detail["name"], tables)
+        for group in detail.get("modifier_groups", []):
+            if not group.get("min_select"):
+                continue
+            ids = {m["id"] for m in group["modifiers"]}
+            chosen = ids & set(line["modifier_ids"])
+            guessed = (
+                chosen
+                and named
+                and not speaks_of_group(user_message, group, OPTION_ALIASES, tables)
+            )
+            key = (detail["id"], group["name"])
+            if (not chosen or guessed) and key not in asked:
+                asked.add(key)
+                total = sum(
+                    x["quantity"] for x in lines if x["menu_item_id"] == line["menu_item_id"]
+                )
+                questions.append(i18n.ask_option(detail["name"], group, total))
+    return questions
+
+
+def _ask(questions: list[str]) -> ToolError:
+    """Not an error to fix: the user has to decide. The question is written for them."""
+    text = "\n".join(questions)
+    return ToolError(
+        "NOT SAVED. Nothing was ordered: the user has to decide. Do not choose for them and do "
+        "not call again until they answer. Ask the user this (already in their language), "
+        f"then call again with their answer:\nASK_USER: {text}\n(Answer the user in {i18n.name()}.)"
+    )
 
 
 def _money(value: float) -> str:
@@ -522,6 +615,8 @@ TableName = Annotated[
     ),
 ]
 _NO_TABLE = {"takeaway", "delivery", "paket", "paket servis", "gel al", "kurye"}
+# What models write when the user named no table.
+_UNKNOWN_TABLE = {"?", "unknown", "none", "null", "n/a", "bilinmiyor", "yok", "table", "masa"}
 
 
 def _result(summary: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -569,11 +664,13 @@ async def create_order(
     """Order for a table (dine-in) or a takeaway/delivery order.
 
     Dine-in: pass the table the user named as table_name. If it already has an open order,
-    the items are ADDED to it; otherwise a new order is opened. If the user named no table
-    and did not say takeaway or delivery, do not call: ask which table.
-    Use every option the user said. If an item has a REQUIRED option the user did not give
-    (e.g. the spice level), do not choose one: ask the user first. Units of the same item
-    with different options go on separate lines.
+    the items are ADDED to it; otherwise a new order is opened.
+    Send exactly what the user said: their quantities and every option they named. Units of
+    the same item with different options go on separate lines.
+    If the user named no table (and did not say takeaway or delivery), or did not give a
+    REQUIRED option such as the spice level, do not choose for them: call anyway with what
+    they said. Nothing is saved; the error gives the question to ask (ASK_USER), already in
+    the user's language. Ask it and wait for their answer.
     """
     i18n.use(user_message, reply_language)
     if channel == "dine_in":
@@ -585,13 +682,15 @@ async def create_order(
             table = next((t for t in await api.get("/tables") if t["id"] == table_id), None)
             if table is None:
                 raise _refuse(f"No table_id {table_id}. Pass table_name, e.g. 'Salon 3'.")
-        else:
+        else:  # the server asks which table (and anything else missing), in their language
+            await _lines(items, user_message, table_missing=True)
             raise _refuse("A dine-in order needs table_name. Ask the user which table.")
-        return await _to_table(table, await _lines(items))
+        return await _to_table(table, await _lines(items, user_message))
     if table_name or table_id is not None:
         raise _refuse(f"{channel} orders have no table. Leave table_name out.")
     order = await api.post(
-        "/orders", {"channel": channel, "table_id": None, "items": await _lines(items)}
+        "/orders",
+        {"channel": channel, "table_id": None, "items": await _lines(items, user_message)},
     )
     summary = i18n.t(
         "opened_channel",
@@ -622,12 +721,16 @@ async def add_items_to_order(
     """ADD items to what a table is having (same as create_order for a table).
 
     Adds to the table's open order, or opens one if it has none. Only adds: to remove or
-    cancel a line use void_order_item. If the user named no table, do not call: ask which
-    table. If a REQUIRED option (e.g. the spice level) is missing, ask; never choose one.
+    cancel a line use void_order_item. Send the user's quantities and options as they said
+    them. If the table or a REQUIRED option (e.g. the spice level) is missing, never choose:
+    call with table_name='?' and what they said; nothing is saved and the error gives the
+    question to ask (ASK_USER) in the user's language.
     """
     i18n.use(user_message, reply_language)
     if _norm(table_name) not in _NO_TABLE:
-        return await _to_table(await _table_by_name(table_name), await _lines(items))
+        if not table_name.strip() or _norm(table_name) in _UNKNOWN_TABLE:
+            await _lines(items, user_message, table_missing=True)
+        return await _to_table(await _table_by_name(table_name), await _lines(items, user_message))
     if order_id is None:
         raise _refuse("For takeaway/delivery pass order_id (list_orders(status='open')).")
     order = await api.get(f"/orders/{order_id}")
@@ -637,7 +740,9 @@ async def add_items_to_order(
             f"{order['status']}). Find it with list_orders(status='open')."
         )
     before = {i["id"] for i in order["items"]}
-    order = await api.post(f"/orders/{order_id}/items", {"items": await _lines(items)})
+    order = await api.post(
+        f"/orders/{order_id}/items", {"items": await _lines(items, user_message)}
+    )
     new = [i for i in order["items"] if i["id"] not in before]
     summary = i18n.t(
         "added_order", order_id=order_id, where=_where(order), lines=_added({**order, "items": new})
