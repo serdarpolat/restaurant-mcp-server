@@ -447,6 +447,51 @@ pass 101/111, but the model still sometimes sends 1 where the user said 2 or 3, 
 chooses a spice level instead of asking in 3 of 9 tries. Both are the model ignoring what
 the tools say; a larger model is the next thing to measure.
 
+**v6.2 → v6.6: the user's own words**
+
+Here every version ran all 40 cases (31 Turkish, 9 English), each 3 times and in two
+modes: with the server's instructions, and without them, as in clients that do not pass MCP
+instructions to the model (LM Studio seemed not to). Without instructions the model sees
+only the tool descriptions and the tool results, so every rule has to live there.
+
+| 40 cases × 3 runs, server instructions on · off | v6.2 | v6.3 | v6.4 | v6.5 | v6.6 |
+|---|---:|---:|---:|---:|---:|
+| Passed (of 120) | 97 · 89 | 97 · 98 | 104 · 101 | 107 · 104 | **107 · 111** |
+| English request, English answer | 7/27 · 25/27 | 25/27 · 21/27 | **27/27 · 27/27** | 27/27 · 27/27 | 26/26 · 27/27 |
+| Turkish request, Turkish answer | 88/88 · 78/85 | 75/88 · 88/91 | 75/85 · 81/88 | 80/87 · 84/86 | 75/83 · 83/84 |
+| Missing detail asked, not guessed (of 12) | 9 · 5 | 7 · 10 | 6 · 8 | **12 · 12** | 12 · 11 |
+| Approval-gated actions (of 27) | 18 · 13 | 22 · 17 | 25 · 26 | 27 · 25 | 26 · 25 |
+| Orders saved with a quantity the user did not say | 0 · 2 | 1 · 2 | 1 · 2 | **0 · 0** | **0 · 0** |
+| Kitchen notes saved that the user never asked for | 0 · 1 | 0 · 1 | 0 · 0 | 1 · 1 | **0 · 0** |
+| Input tokens per case (instructions on) | 19.6k | 22.1k | 23.9k | 21.4k | 21.7k |
+
+Language counts leave out answers too short to tell ("İskender 620 TL.").
+
+- **v6.3: the language lives in the results.** Menu, option and table names are Turkish
+  data, and after a write the model copied the server's Turkish summary into its English
+  answer (English answers 7 of 27 in v6.2). Write tools now take the reply language and
+  write their summaries, previews and approval questions in it, and the approval rule moved
+  into the approval tools' own descriptions (approval without instructions: 13 → 17 of 27).
+- **v6.4: copy, don't classify.** Asked for the user's language, the model answered 'tr'
+  for half of the English requests ("the restaurant is Turkish"). Write tools now take the
+  user's message word for word (`user_message`) and the server detects the language itself:
+  right in 110 of 110 write calls; English answers 27 of 27 in both modes.
+- **v6.5: the server reads the user's words.** The same `user_message` lets the server check
+  quantities ("2 Adana" sent as one is refused) and notice a spice level the user never gave.
+  A missing table or choice now returns `ASK_USER` with the question already written in the
+  user's language. Asking instead of guessing went from 6 · 8 to 12 · 12, and no order was
+  saved with a wrong quantity again.
+- **v6.6: give the fix, not the rule.** After a quantity refusal the model kept resending
+  the same call, with the count in the note ("acılı Adana (2 adet)"): it fixed 2 of 11
+  refusals without instructions. The refusal now carries the corrected `items`, and 6 of 8
+  were fixed. Notes must come from the user's words: the model had written `soğansız`, once
+  as `soğansız (if stated by the user)`, into orders where nobody asked for it.
+
+Still failing in v6.6: with instructions on, Turkish questions are sometimes answered in
+English, mostly about reports and tables (8 of its 13 failures; read tools do not see the
+user's message), report arguments left out (`limit`, `group_by`), and once a "paket
+servis" order sent without `channel=takeaway`, so the server asked which table.
+
 A small local model can still claim success without calling a tool at all (seen once, after
 LM Studio itself rejected a 100% discount). No server can see that, so with local models,
 check the order in the POS, not the chat.
@@ -462,6 +507,7 @@ check the order in the POS, not the chat.
 - [ ] Eval the preview + token approval path (clients without approval prompts)
 - [x] Measure v5 / v6 (English cases, names in order lines, table-based orders)
 - [x] Measure v6.2
+- [x] Measure v6.3 – v6.6 with and without server instructions (language, the user's words)
 - [ ] More models in the comparison
 - [ ] Authentication, then a read-only connection to a real POS
 - [x] Demo video
