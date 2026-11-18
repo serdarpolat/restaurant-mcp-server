@@ -707,9 +707,13 @@ async def test_a_quantity_the_user_did_not_say_is_not_saved(pos_api):
                 "user_message": "Salon 3'e 2 acılı Adana ve 2 ayran aç.",
             },
         )
-        assert result.is_error and "NOT SAVED. Quantities do not match" in text
-        assert "the user said 2 x Adana Kebap, but the lines add up to 1" in text
-        assert "Ayran" not in text  # its quantity was right
+        assert result.is_error and "NOT SAVED. Quantity: the user said 2 x Adana Kebap" in text
+        assert "but the lines add up to 1." in text and "said 2 x Ayran" not in text
+        # the corrected items, ready to copy
+        assert (
+            'exactly these items (the rest unchanged): [{"name": "Adana Kebap", "quantity": 2, '
+            '"options": ["Acılı"]}, {"name": "Ayran", "quantity": 2}]' in text
+        )
         assert await _open_orders(client, "Salon 3") is None  # nothing was opened
         fixed = data(
             await client.call_tool(
@@ -750,6 +754,7 @@ async def test_lines_with_different_options_add_up_to_what_the_user_said(pos_api
         )
     assert ok["summary"].startswith("OPENED order")
     assert three.is_error and "said 2 x Adana Kebap, but the lines add up to 3" in text
+    assert "Put the number the user said in each line's quantity field" in text  # 3 lines for 2
 
 
 async def test_a_missing_table_is_asked_by_the_server_in_the_users_language(pos_api):
@@ -845,3 +850,95 @@ async def test_options_in_other_languages_are_not_second_guessed(pos_api):
             )
         )
     assert order["summary"].startswith("OPENED takeaway order")
+
+
+async def test_two_spicy_and_one_mild_for_two_mixed_adana_gets_two_lines_of_one(pos_api):
+    async with Client(mcp) as client:
+        result, text = await call(
+            client,
+            "create_order",
+            {
+                "table_name": "Salon 6",
+                "items": [
+                    {"name": "Adana Kebap", "quantity": 2, "options": ["Acılı"]},
+                    {"name": "Adana Kebap", "quantity": 1, "options": ["Acısız"]},
+                ],
+                "user_message": "Salon 6'ya 2 Adana aç, biri acılı biri acısız.",
+            },
+        )
+    assert result.is_error
+    assert (
+        '[{"name": "Adana Kebap", "quantity": 1, "options": ["Acılı"]}, '
+        '{"name": "Adana Kebap", "quantity": 1, "options": ["Acısız"]}]' in text
+    )
+
+
+async def test_a_note_the_user_did_not_ask_for_is_not_saved(pos_api):
+    message = "Salon 3'e 2 acılı Adana ve 2 ayran aç."
+    async with Client(mcp) as client:
+        invented, text = await call(
+            client,
+            "create_order",
+            {
+                "table_name": "Salon 3",
+                "items": [
+                    {"name": "Adana", "options": ["Acılı"], "note": "soğansız"},
+                    {"name": "Ayran", "quantity": 2},
+                ],
+                "user_message": message,
+            },
+        )
+        assert await _open_orders(client, "Salon 3") is None
+        # a note that only repeats the line (the count went there) is dropped, and the
+        # missing quantity is reported with the corrected lines
+        repeated, text2 = await call(
+            client,
+            "create_order",
+            {
+                "table_name": "Salon 3",
+                "items": [
+                    {"name": "Adana", "options": ["acılı"], "note": "acılı Adana (2 adet)"},
+                    {"name": "Ayran", "quantity": 2},
+                ],
+                "user_message": message,
+            },
+        )
+        said = data(
+            await client.call_tool(
+                "create_order",
+                {
+                    "table_name": "Salon 3",
+                    "items": [{"name": "Adana", "options": ["Acılı"], "note": "soğansız"}],
+                    "user_message": "Salon 3'e 1 acılı Adana, soğan olmasın",
+                },
+            )
+        )
+    assert invented.is_error
+    assert "Note: the user did not ask for 'soğansız' on Adana Kebap" in text
+    assert "Quantity: the user said 2 x Adana Kebap" in text  # both problems, one refusal
+    assert '{"name": "Adana Kebap", "quantity": 2, "options": ["Acılı"]}' in text
+    assert repeated.is_error and "the user did not ask for" not in text2
+    assert '{"name": "Adana Kebap", "quantity": 2, "options": ["Acılı"]}' in text2
+    assert said["items"][0]["note"] == "soğansız"
+
+
+async def test_a_note_that_only_repeats_the_line_is_dropped(pos_api):
+    async with Client(mcp) as client:
+        order = data(
+            await client.call_tool(
+                "create_order",
+                {
+                    "table_name": "Salon 3",
+                    "items": [
+                        {
+                            "name": "Adana",
+                            "quantity": 2,
+                            "options": ["Acılı"],
+                            "note": "2 acılı Adana",
+                        }
+                    ],
+                    "user_message": "Salon 3'e 2 acılı Adana",
+                },
+            )
+        )
+    assert order["items"][0]["note"] == "" and order["items"][0]["quantity"] == 2

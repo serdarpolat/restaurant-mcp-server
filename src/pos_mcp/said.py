@@ -220,3 +220,100 @@ def speaks_of_group(
             if len(token) >= 3 and v.startswith(token):
                 return True
     return False
+
+
+# --------------------------------------------------------------------------- #
+# Kitchen notes
+# --------------------------------------------------------------------------- #
+
+# Words a note may carry without the user saying them: linking words and politeness.
+_NOTE_FILLERS = {
+    "ve", "ile", "olsun", "lutfen", "icin", "de", "da", "and", "with", "please", "no", "not",
+    "without", "extra", "the", "a", "an", "of", "for", "to", "on",
+}  # fmt: skip
+# Words of the order itself, not of a kitchen request: a note made of these (and of item,
+# option and table names) only restates the order ("paket servis için 3 adet", "Salon 3").
+_ORDER_WORDS = {
+    "paket", "servis", "takeaway", "delivery", "kurye", "gel", "al", "masa", "masasi", "table",
+    "siparis", "order", "ac", "ekle", "open", "add", "start", "tl", "try", "lira", "toplam",
+    "total", "fiyat", "price",
+}  # fmt: skip
+
+
+def _stems(text: str, table_names: Iterable[str]) -> set[str]:
+    """The message's words, plus the Turkish stems of English ones ('onions' -> 'sogan')."""
+    from pos_api.text import GLOSSARY
+
+    out: set[str] = set()
+    for token in _tokens(text, table_names):
+        token = re.split(r"['’]", token)[0]
+        if not re.fullmatch(r"[a-z0-9]+", token):
+            continue
+        out.add(token)
+        for form in (token, token.removesuffix("s")):
+            out.update(GLOSSARY.get(form, ()))
+    return out
+
+
+def _said(word: str, stems: set[str]) -> bool:
+    """'sogansiz' was said if the user wrote 'soğansız', 'soğan olmasın' or 'no onions'."""
+    if word in stems:
+        return True
+    if len(word) < 4:
+        return False
+    return any(len(s) >= 4 and s[:4] == word[:4] for s in stems)
+
+
+def note_words(
+    note: str,
+    detail: dict[str, Any],
+    aliases: dict[str, str],
+    also_known: Iterable[str] = (),
+) -> list[str]:
+    """The words of a note that add something: not the names of the order's items (also
+    misspelt: 'Kabab'), the line's options, tables, numbers, units, order or linking words
+    ('acılı Adana (2 adet)' adds nothing to an Acılı Adana line)."""
+    names_of_items = [detail["name"], *also_known]
+    item_words = [w for n in names_of_items for w in words(n)]
+    known = set(item_words)
+    names = {
+        normalize(m["name"]) for g in detail.get("modifier_groups", []) for m in g["modifiers"]
+    }
+    known |= {w for n in names for w in n.split()}
+    known |= {w for said, target in aliases.items() if target in names for w in said.split()}
+    known |= UNITS | _NOTE_FILLERS | _ORDER_WORDS | set(NUMBERS_TR) | set(NUMBERS_EN)
+    return [
+        w
+        for w in words(note)
+        if w not in known
+        and len(w) > 2  # case endings split off by the apostrophe ('Salon 3'e')
+        and not re.fullmatch(r"[\d.,x]+", w)
+        and not word_matches(w, item_words, " ".join(item_words))
+    ]
+
+
+def note_status(
+    note: str,
+    user_message: str,
+    detail: dict[str, Any],
+    aliases: dict[str, str],
+    table_names: Iterable[str] = (),
+    also_known: Iterable[str] = (),
+) -> tuple[str, list[str]]:
+    """'ok', 'empty' (nothing beyond the line itself: drop it) or 'invented' (words the user
+    never said, such as 'soğansız' for "Salon 3'e 2 acılı Adana"), with those words.
+
+    `also_known`: the other items of the same order (their names restate the order too).
+    Checked only when the message names the item: an answer to a question ("acılı olsun")
+    may come after the note was given, so it cannot be held against it.
+    """
+    if not note.strip():
+        return "ok", []
+    extra = note_words(note, detail, aliases, [*also_known, *table_names])
+    if not extra:
+        return "empty", []
+    if not mentions(user_message, detail["name"], table_names):
+        return "ok", []
+    stems = _stems(user_message, table_names)
+    unsaid = [w for w in extra if not _said(w, stems)]
+    return ("invented", unsaid) if unsaid else ("ok", [])

@@ -101,3 +101,46 @@ def test_mentions_an_item():
     assert mentions("two Adana kebabs", "Adana Kebap", TABLES)
     assert not mentions("acılı", "Adana Kebap", TABLES)
     assert not mentions("Adana'yı iptal et", "Adana Kebap", TABLES)
+
+
+ADANA = {
+    "name": "Adana Kebap",
+    "modifier_groups": [SPICE, {"name": "Porsiyon", "modifiers": [{"name": "1.5 Porsiyon"}]}],
+}
+SALGAM = {"name": "Şalgam", "modifier_groups": []}
+
+
+@pytest.mark.parametrize(
+    ("note", "message", "detail", "expected"),
+    [
+        # words the user never said: seen in the eval logs
+        ("soğansız", "Salon 3'e 2 acılı Adana ve 2 ayran aç.", ADANA, "invented"),
+        ("soğansız (if stated by the user)", "Salon 3'e 2 acılı Adana", ADANA, "invented"),
+        ("sıcak sunulmasın", "Salon 3'e 2 acılı Adana", ADANA, "invented"),
+        # notes that only restate the order: dropped
+        ("acılı Adana (2 adet)", "Salon 3'e 2 acılı Adana", ADANA, "empty"),
+        ("acılı, salon 3 için, 2 adet", "Salon 3'e 2 acılı Adana", ADANA, "empty"),
+        ("Acılı Adana, 2 adet ayran", "Salon 3'e 2 acılı Adana ve 2 ayran", ADANA, "empty"),
+        # the user's own request to the kitchen, in their words or another language
+        ("soğansız", "Salon 3'e 2 acılı Adana, soğansız olsun", ADANA, "ok"),
+        ("soğansız", "2 acılı Adana, soğan olmasın", ADANA, "ok"),
+        ("soğansız", "Add a spicy Adana, no onions", ADANA, "ok"),
+        ("az pişmiş", "1 acılı Adana az pişmiş olsun", ADANA, "ok"),
+        ("acılı", "1 acılı şalgam", SALGAM, "ok"),  # not an option of Şalgam: a real note
+        # an answer to a question does not name the item: not held against an earlier note
+        ("soğansız", "acılı olsun", ADANA, "ok"),
+    ],
+)
+def test_note_status(note, message, detail, expected):
+    from pos_mcp.said import note_status
+
+    also = ["Ayran"] if "ayran" in note.lower() else []
+    assert note_status(note, message, detail, OPTION_ALIASES, TABLES, also)[0] == expected
+
+
+def test_juice_names_the_drink():
+    from pos_mcp.lines import find_item
+
+    menu = [{"id": 1, "name": "Şalgam"}, {"id": 2, "name": "Su"}, {"id": 3, "name": "Limonata"}]
+    assert [i["name"] for i in find_item(menu, "Turnip Juice")] == ["Şalgam"]
+    assert [i["name"] for i in find_item(menu, "şalgam suyu")] == ["Şalgam"]

@@ -9,8 +9,16 @@ from typing import Any
 from evals.language import NAMES, detect
 from evals.world import Resolver
 from pos_api.timeutil import today
-from pos_mcp.lines import LineError, merge_lines, resolve_day, resolve_line, same_table
-from pos_mcp.said import quantity_mentions
+from pos_mcp.lines import (
+    OPTION_ALIASES,
+    LineError,
+    find_item,
+    merge_lines,
+    resolve_day,
+    resolve_line,
+    same_table,
+)
+from pos_mcp.said import note_status, quantity_mentions
 
 WRITE_TOOLS = frozenset(
     {
@@ -280,6 +288,30 @@ def answer_vs_saved(
     return not reasons, reasons
 
 
+def invented_notes(case: dict[str, Any], traj: Trajectory, resolver: Resolver) -> list[str]:
+    """Kitchen notes the user never asked for that were saved ('soğansız' on "2 acılı
+    Adana"): a silent error the expected arguments do not cover."""
+    menu, details = resolver.menu()
+    tables = [t["name"] for t in resolver.tables()]
+    reasons = []
+    for call in traj.calls:
+        if call.tool not in ORDER_TOOLS or call.is_error:
+            continue
+        lines = call.args.get("items") or []
+        found = [find_item(menu, str(line.get("name", ""))) for line in lines]
+        names = [f[0]["name"] for f in found if len(f) == 1]
+        message = call.args.get("user_message") or case["prompt"]
+        for line, hits in zip(lines, found, strict=True):
+            note = str(line.get("note") or "")
+            if not note.strip() or len(hits) != 1:
+                continue
+            detail = details[hits[0]["id"]]
+            status, _ = note_status(note, message, detail, OPTION_ALIASES, tables, names)
+            if status == "invented":
+                reasons.append(f"saved a note the user did not ask for: {note!r}")
+    return reasons
+
+
 def score(case: dict[str, Any], traj: Trajectory, resolver: Resolver) -> CaseResult:
     reasons: list[str] = []
     if traj.error:
@@ -342,6 +374,7 @@ def score(case: dict[str, Any], traj: Trajectory, resolver: Resolver) -> CaseRes
     # What the user is told must be what was saved (a wrong count is a wrong bill).
     answer_matches_saved, mismatches = answer_vs_saved(traj, resolver, language)
     reasons += mismatches
+    reasons += invented_notes(case, traj, resolver)
 
     reasons = list(dict.fromkeys(reasons))  # dedupe, keep order
     return CaseResult(

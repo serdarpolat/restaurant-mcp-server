@@ -8,6 +8,7 @@ With POS_API_URL it talks to a running POS API over HTTP.
 
 import argparse
 import inspect
+import json
 import logging
 import os
 from datetime import date, datetime, timedelta
@@ -33,7 +34,7 @@ from pos_mcp.lines import (
     resolve_line,
     same_table,
 )
-from pos_mcp.said import mentions, quantities, speaks_of_group
+from pos_mcp.said import mentions, note_status, quantities, speaks_of_group
 
 RESTAURANT_TZ = ZoneInfo(os.getenv("RESTAURANT_TZ", "Europe/Istanbul"))
 
@@ -149,7 +150,8 @@ class OrderLine(BaseModel):
         ge=1,
         le=50,
         description="How many of this item WITH THESE OPTIONS: '3 acısız lahmacun' = 3; "
-        "'2 Adana, biri acılı biri acısız' = two lines with quantity 1.",
+        "'2 Adana, biri acılı biri acısız' = two lines with quantity 1. The count goes here, "
+        "never in the note. Checked against user_message.",
     )
     options: list[str] = Field(
         default_factory=list,
@@ -160,7 +162,11 @@ class OrderLine(BaseModel):
     modifier_ids: list[int] = Field(
         default_factory=list, description="Option ids, if you have them instead of names."
     )
-    note: str = Field(default="", description="Free-text kitchen note, e.g. 'soğansız'.")
+    note: str = Field(
+        default="",
+        description="Only a request the user made to the kitchen, in their words. Empty if "
+        "they made none (never the count, options or table). Checked against user_message.",
+    )
 
 
 Items = Annotated[list[OrderLine], Field(min_length=1)]
@@ -190,13 +196,51 @@ async def _lines(
         except LineError as exc:
             where = f"Line {n} ('{line.name}')" if len(items) > 1 else f"'{line.name}'"
             raise _refuse(f"{where}: {exc}") from None
+    out = _checked_notes(out, details, user_message, tables)
     lines = merge_lines(out)
-    _check_quantities(lines, details, user_message, tables)
+    try:
+        _check_quantities(lines, details, user_message, tables)
+    except _Fix as exc:
+        raise _refuse_lines(exc.problems, exc.fixed, details) from None
     questions = [i18n.t("ask_table")] if table_missing else []
     questions += _choices_to_ask(lines, details, user_message, tables)
     if questions:
         raise _ask(questions)
     return lines
+
+
+class _Fix(Exception):
+    """Lines that need fixing: what is wrong, and the corrected lines to send (if known)."""
+
+    def __init__(self, problems: list[str], fixed: list[dict[str, Any]] | None):
+        super().__init__("; ".join(problems))
+        self.problems, self.fixed = problems, fixed
+
+
+def _as_items(lines: list[dict[str, Any]], details: dict[int, dict[str, Any]]) -> str:
+    """Lines as the `items` argument, by name: what the model should send, ready to copy."""
+    items = []
+    for line in lines:
+        detail = details[line["menu_item_id"]]
+        names = {m["id"]: m["name"] for g in detail["modifier_groups"] for m in g["modifiers"]}
+        item: dict[str, Any] = {"name": detail["name"], "quantity": line["quantity"]}
+        if line["modifier_ids"]:
+            item["options"] = [names[i] for i in line["modifier_ids"]]
+        if line.get("note"):
+            item["note"] = line["note"]
+        items.append(item)
+    return json.dumps(items, ensure_ascii=False)
+
+
+def _refuse_lines(
+    problems: list[str], fixed: list[dict[str, Any]] | None, details: dict[int, dict[str, Any]]
+) -> ToolError:
+    fix = (
+        f" Call again with exactly these items (the rest unchanged): {_as_items(fixed, details)}"
+        if fixed is not None
+        else " Put the number the user said in each line's quantity field, never in the note."
+    )
+    return _refuse("; ".join(problems) + "." + fix)
 
 
 def _check_quantities(
@@ -205,23 +249,62 @@ def _check_quantities(
     user_message: str,
     tables: list[str],
 ) -> None:
-    """'Salon 3'e 2 Adana' sent as 1 x Adana: refuse, naming both numbers."""
+    """'Salon 3'e 2 Adana' sent as 1 x Adana: raise _Fix with both numbers and the corrected
+    lines. (The model put the count in the note and resent the same call after a hint;
+    a corrected copy is easier to follow than a rule.)"""
     names = {line["menu_item_id"]: details[line["menu_item_id"]]["name"] for line in lines}
     said = quantities(user_message, names, tables, lang=i18n.current())
-    wrong = []
+    problems = []
+    fixed = [dict(line) for line in lines]
+    fixable = True
     for item_id, wanted in said.items():
-        sent = sum(line["quantity"] for line in lines if line["menu_item_id"] == item_id)
-        if sent != wanted:
-            wrong.append(
-                f"the user said {wanted} x {names[item_id]}, but the lines add up to {sent}"
-            )
-    if wrong:
-        raise _refuse(
-            "Quantities do not match the user's message: "
-            + "; ".join(wrong)
-            + ". Send the quantity the user said (lines of one item with different options "
-            "must add up to it), all in one call."
+        own = [line for line in fixed if line["menu_item_id"] == item_id]
+        sent = sum(line["quantity"] for line in own)
+        if sent == wanted:
+            continue
+        problems.append(
+            f"Quantity: the user said {wanted} x {names[item_id]}, but the lines add up to {sent}"
         )
+        if len(own) == 1:
+            own[0]["quantity"] = wanted
+        elif len(own) == wanted:  # '2 Adana, one spicy one not' = two lines of 1
+            for line in own:
+                line["quantity"] = 1
+        else:
+            fixable = False
+    if problems:
+        raise _Fix(problems, fixed if fixable else None)
+
+
+def _checked_notes(
+    lines: list[dict[str, Any]],
+    details: dict[int, dict[str, Any]],
+    user_message: str,
+    tables: list[str],
+) -> list[dict[str, Any]]:
+    """A note must be the user's: one that only repeats the line ('acılı Adana (2 adet)') is
+    dropped; one with words the user never said ('soğansız') is refused, nothing saved."""
+    problems, fixed = [], []
+    ordered = [details[line["menu_item_id"]]["name"] for line in lines]
+    for line in lines:
+        detail = details[line["menu_item_id"]]
+        status, _ = note_status(
+            line["note"], user_message, detail, OPTION_ALIASES, tables, also_known=ordered
+        )
+        if status == "invented":
+            problems.append(
+                f"Note: the user did not ask for '{line['note']}' on {detail['name']} (a note "
+                "is only what the user asked the kitchen, in their words)"
+            )
+        fixed.append(line if status == "ok" else {**line, "note": ""})
+    if problems:
+        merged = merge_lines(fixed)
+        try:
+            _check_quantities(merged, details, user_message, tables)
+        except _Fix as exc:  # one refusal for both, with one corrected list
+            raise _refuse_lines(problems + exc.problems, exc.fixed, details) from None
+        raise _refuse_lines(problems, merged, details)
+    return fixed
 
 
 def _choices_to_ask(

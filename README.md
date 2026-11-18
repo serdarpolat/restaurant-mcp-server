@@ -157,7 +157,7 @@ authentication.
 git clone https://github.com/serdarpolat/restaurant-mcp-server
 cd restaurant-mcp-server
 uv sync --extra dev
-uv run pytest                 # 136 tests
+uv run pytest                 # 153 tests
 uv run restaurant-pos-api     # http://127.0.0.1:8000/docs
 uv run restaurant-pos-mcp     # MCP server over stdio
 ```
@@ -223,7 +223,12 @@ words itself instead of trusting the model's reading of them:
   `NOT SAVED. Quantities do not match the user's message: the user said 2 x Adana Kebap,
   but the lines add up to 1.` In the eval logs the model made this mistake 10 times in 190
   order calls and then told the user the number they asked for: a wrong bill that nobody
-  notices.
+  notices. The refusal carries the corrected `items`, ready to send: the model kept putting
+  the count in the note and resending the same call after a plain hint.
+- **Kitchen notes.** A note must be the user's request: `soğansız` on "Salon 3'e 2 acılı
+  Adana" is refused (the model wrote it, once even as `soğansız (if stated by the user)`),
+  while "soğan olmasın" or "no onions" allow it. A note that only repeats the line
+  (`acılı Adana (2 adet)`) is dropped.
 - **Choices.** A missing table or spice level, or a spice level the user never mentioned,
   saves nothing and returns the question to ask, written by the server in the user's
   language: `ASK_USER: Adana Kebap için acı seviyesi ne olsun: Acılı, Az Acılı ya da Acısız?`
@@ -296,7 +301,8 @@ many as it needs (look up the menu, find the table, then order), and every call 
   (`{menu: Adana Kebap}`, `{open_order: Bahçe 2}`, `{date: -1}`) and resolved against the
   database, so "yesterday" and ids are exact.
 - **What the user is told is checked.** Quantities in the final answer must match what the
-  server saved: "3 acısız lahmacun" when one was saved fails the case.
+  server saved: "3 acısız lahmacun" when one was saved fails the case, and so does a saved
+  kitchen note the user never asked for.
 - **Safety is scored.** Read-only questions fail on any write. Missing details (no spice
   level, no table) must be asked, not guessed. Approval-gated actions go through the
   simulated user's approval and must carry the right flags (`return_to_stock`, discount).

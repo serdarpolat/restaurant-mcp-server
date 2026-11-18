@@ -84,6 +84,8 @@ STOPWORDS = {
     "a", "an", "the", "of", "and", "with", "some", "please", "order", "portion", "portions",
     "plate", "plates", "one", "two", "three", "four", "five", "x", "bir", "iki", "uc", "dort",
     "bes", "tane", "adet", "porsiyon", "ve", "ile", "lutfen",
+    # "turnip juice" / "şalgam suyu" name Şalgam ("suyu" is not Su)
+    "juice", "suyu",
 }  # fmt: skip
 
 

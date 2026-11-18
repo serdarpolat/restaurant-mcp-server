@@ -587,3 +587,18 @@ def test_answer_must_state_what_was_saved(resolver):
         None,
         [],
     )
+
+
+def test_a_saved_note_the_user_did_not_ask_for_fails(resolver):
+    from evals.scoring import ToolCall, Trajectory, invented_notes
+
+    case = {"prompt": "Salon 3'e 2 acılı Adana ve 2 ayran aç."}
+
+    def saved(note):
+        args = {"items": [{"name": "Adana Kebap", "quantity": 2, "options": ["Acılı"],
+                           "note": note}, {"name": "Ayran", "quantity": 2}]}  # fmt: skip
+        return invented_notes(case, Trajectory(calls=[ToolCall("create_order", args)]), resolver)
+
+    assert saved("soğansız") == ["saved a note the user did not ask for: 'soğansız'"]
+    assert saved("acılı Adana (2 adet)") == []  # only restates the line
+    assert saved("") == []
