@@ -430,6 +430,76 @@ async def test_orders_go_to_the_named_table_whatever_order_id_was_remembered(pos
         assert result.is_error and "no table" in text
 
 
+async def test_a_table_the_user_did_not_say_is_refused(pos_api):
+    """Found testing live: table_name/table_id is trusted with no check against what the
+    user actually said, unlike every other argument (quantities, options, channel). A model
+    that mixes up two tables - or still has a stale table_id from earlier in the chat - used
+    to open or add to the WRONG table's bill without a word of complaint."""
+    async with Client(mcp) as client:
+        wrong, text = await call(
+            client,
+            "create_order",
+            {
+                "table_name": "Salon 4",  # the model's argument...
+                "items": [{"name": "Ayran", "quantity": 1}],
+                "user_message": "Teras 2'ye 1 ayran aç.",  # ...does not match the user's words
+            },
+        )
+        assert wrong.is_error
+        assert "user said 'Teras 2', not 'Salon 4'" in text
+        assert "table_name='Teras 2'" in text
+        # the same table_id taken from an earlier turn, now stale
+        salon4 = next(
+            t for t in data(await client.call_tool("list_tables", {})) if t["name"] == "Salon 4"
+        )
+        stale_id, text = await call(
+            client,
+            "create_order",
+            {
+                "table_id": salon4["table_id"],
+                "items": [{"name": "Ayran", "quantity": 1}],
+                "user_message": "Teras 2'ye 1 ayran aç.",
+            },
+        )
+        assert stale_id.is_error and "user said 'Teras 2', not 'Salon 4'" in text
+        # add_items_to_order is checked the same way
+        wrong_add, text = await call(
+            client,
+            "add_items_to_order",
+            {
+                "table_name": "Salon 4",
+                "items": [{"name": "Ayran", "quantity": 1}],
+                "user_message": "Teras 2'ye 1 ayran ekle.",
+            },
+        )
+        assert wrong_add.is_error and "user said 'Teras 2', not 'Salon 4'" in text
+        # the matching table still works
+        ok = data(
+            await client.call_tool(
+                "create_order",
+                {
+                    "table_name": "Teras 2",
+                    "items": [{"name": "Ayran", "quantity": 1}],
+                    "user_message": "Teras 2'ye 1 ayran aç.",
+                },
+            )
+        )
+        assert ok["table"] == "Teras 2"
+        # a message naming no table at all (an answer, a generic "add it") is never held
+        # against the caller's table_name - same conservative rule as quantities()
+        ok2 = data(
+            await client.call_tool(
+                "add_items_to_order",
+                {
+                    "table_name": "Teras 2",
+                    "items": [{"name": "Çay", "quantity": 1}],
+                    "user_message": "evet, ekleyin",
+                },
+            )
+        )
+        assert ok2["table"] == "Teras 2"
+
+
 async def test_table_names_match_whole_words(pos_api):
     async with Client(mcp) as client:
         tables = data(await client.call_tool("list_tables", {}))

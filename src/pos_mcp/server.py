@@ -35,7 +35,14 @@ from pos_mcp.lines import (
     resolve_line,
     same_table,
 )
-from pos_mcp.said import channel_from_message, mentions, note_status, quantities, speaks_of_group
+from pos_mcp.said import (
+    channel_from_message,
+    mentions,
+    note_status,
+    quantities,
+    speaks_of_group,
+    table_from_message,
+)
 
 RESTAURANT_TZ = ZoneInfo(os.getenv("RESTAURANT_TZ", "Europe/Istanbul"))
 
@@ -709,13 +716,35 @@ async def get_stock_movements(
 # --------------------------------------------------------------------------- #
 
 
-async def _table_by_name(table_name: str) -> dict[str, Any]:
+async def _table_by_name(table_name: str, user_message: str | None = None) -> dict[str, Any]:
     tables = await api.get("/tables")
     found = next((t for t in tables if same_table(table_name, t["name"])), None)
     if found is None:
         names = ", ".join(t["name"] for t in tables)
         raise _refuse(f"No table is named '{table_name}'. Tables: {names}.")
+    if user_message:
+        _check_table_said(user_message, tables, found)
     return found
+
+
+def _check_table_said(
+    user_message: str, tables: list[dict[str, Any]], table: dict[str, Any]
+) -> None:
+    """Refuse if the user's own words clearly name a DIFFERENT table than the one about to
+    be used - the same silent-wrong-bill risk as a quantity nobody checked (said.quantities,
+    _check_quantities): "Teras 2'ye ... aç" with table_name/table_id pointing at 'Salon 4'
+    used to open the order on Salon 4 without a word of complaint.
+
+    Deliberately conservative, like every other "said" check here: a message that names no
+    table, or more than one, is never held against the caller's table_name/table_id - only
+    an unambiguous OTHER table blocks the call.
+    """
+    said = table_from_message(user_message, [t["name"] for t in tables])
+    if said and not same_table(said, table["name"]):
+        raise _refuse(
+            f"The user said '{said}', not '{table['name']}'. Pass table_name='{said}' "
+            "(or ask the user which table they meant)."
+        )
 
 
 TableName = Annotated[
@@ -794,11 +823,13 @@ async def create_order(
         if table_name and table_id is not None:
             await _checked_table(table_id, table_name)
         if table_name:
-            table = await _table_by_name(table_name)
+            table = await _table_by_name(table_name, user_message)
         elif table_id is not None:
-            table = next((t for t in await api.get("/tables") if t["id"] == table_id), None)
+            tables = await api.get("/tables")
+            table = next((t for t in tables if t["id"] == table_id), None)
             if table is None:
                 raise _refuse(f"No table_id {table_id}. Pass table_name, e.g. 'Salon 3'.")
+            _check_table_said(user_message, tables, table)
         else:  # the server asks which table (and anything else missing), in their language
             await _lines(items, user_message, table_missing=True)
             raise _refuse("A dine-in order needs table_name. Ask the user which table.")
@@ -847,7 +878,9 @@ async def add_items_to_order(
     if _norm(table_name) not in _NO_TABLE:
         if not table_name.strip() or _norm(table_name) in _UNKNOWN_TABLE:
             await _lines(items, user_message, table_missing=True)
-        return await _to_table(await _table_by_name(table_name), await _lines(items, user_message))
+        return await _to_table(
+            await _table_by_name(table_name, user_message), await _lines(items, user_message)
+        )
     if order_id is None:
         raise _refuse("For takeaway/delivery pass order_id (list_orders(status='open')).")
     order = await api.get(f"/orders/{order_id}")

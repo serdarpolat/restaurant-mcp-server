@@ -163,3 +163,22 @@ def test_channel_from_message(text, expected):
     from pos_mcp.said import channel_from_message
 
     assert channel_from_message(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Teras 2'ye 1 ayran aç.", "Teras 2"),  # a case ending glued on with an apostrophe
+        ("Salon 4 için hesap getir", "Salon 4"),
+        ("Salon 10 dolu mu?", "Salon 10"),  # not read as naming "Salon 1"
+        ("Bahçe 2 masasına 1 çay", "Bahçe 2"),
+        ("Salon 1 ve Salon 4 için hesap getir", None),  # two tables named: ambiguous
+        ("evet, ekleyin", None),  # no table named: never held against the caller's table
+        ("masaya ekle", None),
+    ],
+)
+def test_table_from_message(text, expected):
+    from pos_mcp.said import table_from_message
+
+    tables = [*TABLES, "Salon 1", "Salon 10", "Teras 2"]
+    assert table_from_message(text, tables) == expected

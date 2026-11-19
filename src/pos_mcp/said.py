@@ -218,6 +218,30 @@ def channel_from_message(text: str) -> str | None:
     return None
 
 
+def table_from_message(text: str, table_names: Iterable[str]) -> str | None:
+    """The one table the message clearly names ("Teras 2'ye ... aç" -> 'Teras 2'), or None
+    if it names none or more than one.
+
+    A safety net for create_order/add_items_to_order: table_name/table_id used to be
+    trusted with no check against the user's own words at all (unlike quantities, options
+    and channel) - a model that mixed up two tables, or still had a stale table_id from
+    earlier in the chat, opened or added to the wrong table's bill without a word of
+    complaint. Built like _tokens' own table-name matching (lines.same_table does not
+    handle a case ending glued on with an apostrophe, "Teras 2'ye", inside a full sentence),
+    so the ending is allowed but never required: deliberately conservative, like every
+    other check here - a message that names no table, or names two, is never held against
+    the table the caller gave.
+    """
+    normalized = normalize(text)
+    found = [
+        name
+        for name in table_names
+        if (parts := [re.escape(p) for p in words(name)])
+        and re.search(r"\b" + r"\s*".join(parts) + r"\b(?:['’][a-z]+)?", normalized)
+    ]
+    return found[0] if len(found) == 1 else None
+
+
 # Words that are about an option group without naming one choice: "acı olmasın", "spice".
 GROUP_WORDS = {
     "aci seviyesi": {"aci", "acili", "acisiz", "biber", "spicy", "spice", "hot", "mild",
