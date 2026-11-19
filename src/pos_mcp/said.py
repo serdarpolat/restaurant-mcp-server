@@ -191,6 +191,33 @@ def mentions(text: str, item_name: str, table_names: Iterable[str] = ()) -> bool
     return any(_names(t, item_name) for t in _tokens(text, table_names))
 
 
+# Words that say an order has no table, by themselves: the model may still default to
+# dine-in and either leave the table out or ask which table (server.py's _NO_TABLE
+# covers the same words when the model names a "table" that is really the channel).
+_TAKEAWAY_WORDS = {"paket", "takeaway", "togo"}
+_DELIVERY_WORDS = {"kurye", "delivery", "deliver"}
+_PICKUP_PHRASE = ("gel", "al")  # "gel al" = "come and get it"
+
+
+def channel_from_message(text: str) -> str | None:
+    """'takeaway', 'delivery' or None: did the user say this order has no table?
+
+    A safety net for create_order: a model that reads "Paket servis: 3 lahmacun" may
+    still leave channel at its 'dine_in' default and ask which table instead of placing
+    a takeaway order. Only used when the model gave no table either way.
+    """
+    tokens = _tokens(text)
+    words_here = set(tokens)
+    if words_here & _DELIVERY_WORDS:
+        return "delivery"
+    if words_here & _TAKEAWAY_WORDS:
+        return "takeaway"
+    for i in range(len(tokens) - 1):
+        if (tokens[i], tokens[i + 1]) == _PICKUP_PHRASE:
+            return "takeaway"
+    return None
+
+
 # Words that are about an option group without naming one choice: "acı olmasın", "spice".
 GROUP_WORDS = {
     "aci seviyesi": {"aci", "acili", "acisiz", "biber", "spicy", "spice", "hot", "mild",

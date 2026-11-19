@@ -200,6 +200,25 @@ async def test_reports_echo_the_period_they_cover(pos_api):
     assert day["period"] == {"date_from": today, "date_to": today}
 
 
+async def test_read_tools_hint_the_language_only_when_given_user_message(pos_api):
+    """Report-style read tools return data, not a sentence to copy, so unlike write tools the
+    language hint is opt-in: no reminder without user_message, and none either when its
+    language cannot be told (too short or mixed)."""
+    async with Client(mcp) as client:
+        tr = data(
+            await client.call_tool(
+                "get_sales_report", {"user_message": "Bu haftanın saatlik satışları ne?"}
+            )
+        )
+        en = data(await client.call_tool("get_top_items", {"user_message": "What sold the most?"}))
+        bare = data(await client.call_tool("get_void_report", {}))
+        unclear = data(await client.call_tool("get_daily_summary", {"user_message": "ok"}))
+    assert tr["answer_the_user_in"] == "Turkish"
+    assert en["answer_the_user_in"] == "English"
+    assert "answer_the_user_in" not in bare
+    assert "answer_the_user_in" not in unclear
+
+
 async def test_instructions_and_parameter_hints_reach_the_model(pos_api):
     async with Client(mcp) as client:
         tools = {t.name: t for t in (await client.list_tools()).tools}
@@ -776,6 +795,48 @@ async def test_a_missing_table_is_asked_by_the_server_in_the_users_language(pos_
     assert tr.is_error and "ASK_USER: Hangi masa için?" in tr_text
     assert tr_text.endswith("(Answer the user in Turkish.)")
     assert en.is_error and "ASK_USER: Which table is this for?" in en_text
+
+
+async def test_takeaway_channel_is_inferred_when_the_model_forgets_it(pos_api):
+    """ "Paket servis: 3 acısız lahmacun" left at channel='dine_in' with no table used to make
+    the server ask "which table?" instead of placing the takeaway order (found in testing)."""
+    async with Client(mcp) as client:
+        order = data(
+            await client.call_tool(
+                "create_order",
+                {
+                    # channel left at its default; the model forgot takeaway has no table
+                    "items": [{"name": "Lahmacun", "quantity": 3, "options": ["acısız"]}],
+                    "user_message": "Paket servis: 3 acısız lahmacun.",
+                },
+            )
+        )
+        delivery = data(
+            await client.call_tool(
+                "create_order",
+                {
+                    "items": [{"name": "Çay", "quantity": 1}],
+                    "user_message": "Kurye ile 1 çay gönder.",
+                },
+            )
+        )
+    assert order["channel"] == "takeaway" and order["table"] is None
+    assert delivery["channel"] == "delivery" and delivery["table"] is None
+
+
+async def test_takeaway_words_do_not_override_an_explicit_table(pos_api):
+    async with Client(mcp) as client:
+        order = data(
+            await client.call_tool(
+                "create_order",
+                {
+                    "table_name": "Salon 4",
+                    "items": [{"name": "Çay", "quantity": 1}],
+                    "user_message": "Salon 4'e paket kutusunda servis edilsin, 1 çay aç.",
+                },
+            )
+        )
+    assert order["table"] == "Salon 4"
 
 
 async def test_a_spice_level_the_user_did_not_give_is_asked_not_chosen(pos_api):

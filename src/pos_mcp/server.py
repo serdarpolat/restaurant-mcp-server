@@ -24,7 +24,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from pos_mcp import api, i18n
 from pos_mcp.confirmation import Approval, Gate, blocked, gate
-from pos_mcp.i18n import ReplyLanguage, UserMessage
+from pos_mcp.i18n import ReplyLanguage, UserMessage, UserMessageOptional
+from pos_mcp.language import detect_message
 from pos_mcp.lines import (
     OPTION_ALIASES,
     LineError,
@@ -34,7 +35,7 @@ from pos_mcp.lines import (
     resolve_line,
     same_table,
 )
-from pos_mcp.said import mentions, note_status, quantities, speaks_of_group
+from pos_mcp.said import channel_from_message, mentions, note_status, quantities, speaks_of_group
 
 RESTAURANT_TZ = ZoneInfo(os.getenv("RESTAURANT_TZ", "Europe/Istanbul"))
 
@@ -46,7 +47,10 @@ write in any language.
   English -> English, Türkçe -> Türkçe, Deutsch -> Deutsch.
   Keep menu and table names as they are; the sentences around them are in the user's
   language. Write tools take user_message (the user's latest message, word for word)
-  and answer in its language.
+  and answer in its language. Reports and get_order take it too (optional there,
+  because they return data for you to describe, not a sentence to copy) - pass it,
+  especially when you are about to answer in a different language than earlier in
+  this chat.
 - Dates: "yesterday" -> date_from='yesterday' (one date = that day only); "today" ->
   'today'; "last 7 days" -> date_from='-7', date_to='today'. Never compute a year yourself.
   Money is TRY, times are local.
@@ -477,6 +481,19 @@ def _rename_id(rows: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
     return [{key: row["id"], **{k: v for k, v in row.items() if k != "id"}} for row in rows]
 
 
+def _language_hint(data: dict[str, Any], user_message: str | None) -> dict[str, Any]:
+    """Add a language reminder to a read tool's result, the same way write tools do.
+
+    Read tools return data for the model to describe in its own words, not a sentence to
+    copy, so unlike write tools the hint is opt-in: pass user_message to get it. Silent when
+    the message is missing or too short/mixed to tell (never a wrong "answer in English").
+    """
+    if not user_message or detect_message(user_message) is None:
+        return data
+    i18n.use(user_message)
+    return {**data, **i18n.reply_note()}
+
+
 # --------------------------------------------------------------------------- #
 # Read tools
 # --------------------------------------------------------------------------- #
@@ -572,6 +589,7 @@ async def get_order(
     table_name: Annotated[
         str | None, Field(description="A table's name: returns that table's open order.")
     ] = None,
+    user_message: UserMessageOptional = None,
 ) -> dict[str, Any]:
     """One order with its line items (ids, options, notes, void status) and payments.
 
@@ -581,20 +599,23 @@ async def get_order(
         table = await _table_by_name(table_name)
         if not table["open_order_id"]:
             raise ToolError(f"{table['name']} has no open order ({table['status']}).")
-        return await api.get(f"/orders/{table['open_order_id']}")
+        return _language_hint(await api.get(f"/orders/{table['open_order_id']}"), user_message)
     if order_id is None:
         raise ToolError("Pass table_name (e.g. 'Teras 2') or order_id.")
     try:
-        return await api.get(f"/orders/{order_id}")
+        return _language_hint(await api.get(f"/orders/{order_id}"), user_message)
     except ToolError as exc:
         raise ToolError(f"{exc} For a table's current order pass table_name instead.") from None
 
 
 @mcp.tool(annotations=READ)
-async def get_daily_summary(day: Date = None) -> dict[str, Any]:
+async def get_daily_summary(
+    day: Date = None, user_message: UserMessageOptional = None
+) -> dict[str, Any]:
     """End-of-day (Z) report for one day: sales, discounts, channels, payment methods, voids."""
     (day,) = _dates(day)
-    return await api.get("/reports/daily-summary", day=day)
+    data = await api.get("/reports/daily-summary", day=day)
+    return _language_hint(data, user_message)
 
 
 @mcp.tool(annotations=READ)
@@ -602,13 +623,15 @@ async def get_sales_report(
     date_from: Date = None,
     date_to: Date = None,
     group_by: Literal["day", "hour", "weekday", "channel"] = "day",
+    user_message: UserMessageOptional = None,
 ) -> dict[str, Any]:
     """Paid sales for a date range, grouped by day, hour of day, weekday or channel.
 
     Use it for trends and comparisons (e.g. this week vs last week = two calls).
     """
     date_from, date_to = _dates(date_from, date_to)
-    return await api.get("/reports/sales", date_from=date_from, date_to=date_to, group_by=group_by)
+    data = await api.get("/reports/sales", date_from=date_from, date_to=date_to, group_by=group_by)
+    return _language_hint(data, user_message)
 
 
 @mcp.tool(annotations=READ)
@@ -620,6 +643,7 @@ async def get_top_items(
     limit: Annotated[
         int, Field(ge=1, le=50, description="How many the user asked for: 'top 5' = 5.")
     ] = 10,
+    user_message: UserMessageOptional = None,
 ) -> dict[str, Any]:
     """Best-selling menu items in a date range, by quantity or revenue."""
     date_from, date_to = _dates(date_from, date_to)
@@ -631,23 +655,27 @@ async def get_top_items(
         category=category,
         limit=limit,
     )
-    return {"period": _period(date_from, date_to), "items": items}
+    return _language_hint({"period": _period(date_from, date_to), "items": items}, user_message)
 
 
 @mcp.tool(annotations=READ)
-async def get_staff_performance(date_from: Date = None, date_to: Date = None) -> dict[str, Any]:
+async def get_staff_performance(
+    date_from: Date = None, date_to: Date = None, user_message: UserMessageOptional = None
+) -> dict[str, Any]:
     """Orders, revenue and average ticket per staff member, highest revenue first."""
     date_from, date_to = _dates(date_from, date_to)
     staff = await api.get("/reports/staff", date_from=date_from, date_to=date_to)
-    return {"period": _period(date_from, date_to), "staff": staff}
+    return _language_hint({"period": _period(date_from, date_to), "staff": staff}, user_message)
 
 
 @mcp.tool(annotations=READ)
-async def get_void_report(date_from: Date = None, date_to: Date = None) -> dict[str, Any]:
+async def get_void_report(
+    date_from: Date = None, date_to: Date = None, user_message: UserMessageOptional = None
+) -> dict[str, Any]:
     """Voided/cancelled items by item and reason, with lost value. Useful for loss analysis."""
     date_from, date_to = _dates(date_from, date_to)
     voids = await api.get("/reports/voids", date_from=date_from, date_to=date_to)
-    return {"period": _period(date_from, date_to), "voids": voids}
+    return _language_hint({"period": _period(date_from, date_to), "voids": voids}, user_message)
 
 
 @mcp.tool(annotations=READ)
@@ -756,6 +784,12 @@ async def create_order(
     the user's language. Ask it and wait for their answer.
     """
     i18n.use(user_message, reply_language)
+    if channel == "dine_in" and not table_name and table_id is None:
+        # The model left channel at its default and named no table either: maybe because
+        # it forgot takeaway/delivery has none, not because the user wants dine-in.
+        detected = channel_from_message(user_message)
+        if detected:
+            channel = detected
     if channel == "dine_in":
         if table_name and table_id is not None:
             await _checked_table(table_id, table_name)

@@ -44,6 +44,15 @@ ReplyLanguage = Annotated[
         max_length=20,
     ),
 ]
+UserMessageOptional = Annotated[
+    str | None,
+    Field(
+        description="Optional: the user's latest message, copied word for word. Read tools "
+        "return data to describe yourself, not a sentence to copy, so pass this to get a "
+        "reminder of which language to answer in.",
+        max_length=2000,
+    ),
+]
 
 _ALIASES = {
     "en": "en",

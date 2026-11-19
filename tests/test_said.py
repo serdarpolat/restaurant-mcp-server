@@ -144,3 +144,22 @@ def test_juice_names_the_drink():
     menu = [{"id": 1, "name": "Şalgam"}, {"id": 2, "name": "Su"}, {"id": 3, "name": "Limonata"}]
     assert [i["name"] for i in find_item(menu, "Turnip Juice")] == ["Şalgam"]
     assert [i["name"] for i in find_item(menu, "şalgam suyu")] == ["Şalgam"]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Paket servis: 3 acısız lahmacun ve 1 şalgam.", "takeaway"),
+        ("Paket, 2 Adana Kebap.", "takeaway"),
+        ("Takeaway order: two teas.", "takeaway"),
+        ("Gel al, 1 Beyti.", "takeaway"),
+        ("Kurye ile 2 Adana gönder.", "delivery"),
+        ("Delivery, one lahmacun please.", "delivery"),
+        ("Salon 4'e 2 Adana aç.", None),  # dine-in: names a table, not a channel
+        ("2 kola ekle.", None),  # neither a table nor a channel: the server must still ask
+    ],
+)
+def test_channel_from_message(text, expected):
+    from pos_mcp.said import channel_from_message
+
+    assert channel_from_message(text) == expected
