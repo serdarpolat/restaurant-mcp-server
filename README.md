@@ -447,23 +447,23 @@ pass 101/111, but the model still sometimes sends 1 where the user said 2 or 3, 
 chooses a spice level instead of asking in 3 of 9 tries. Both are the model ignoring what
 the tools say; a larger model is the next thing to measure.
 
-**v6.2 → v6.6: the user's own words**
+**v6.2 → v6.7: the user's own words**
 
 Here every version ran all 40 cases (31 Turkish, 9 English), each 3 times and in two
 modes: with the server's instructions, and without them, as in clients that do not pass MCP
 instructions to the model (LM Studio seemed not to). Without instructions the model sees
 only the tool descriptions and the tool results, so every rule has to live there.
 
-| 40 cases × 3 runs, server instructions on · off | v6.2 | v6.3 | v6.4 | v6.5 | v6.6 |
-|---|---:|---:|---:|---:|---:|
-| Passed (of 120) | 97 · 89 | 97 · 98 | 104 · 101 | 107 · 104 | **107 · 111** |
-| English request, English answer | 7/27 · 25/27 | 25/27 · 21/27 | **27/27 · 27/27** | 27/27 · 27/27 | 26/26 · 27/27 |
-| Turkish request, Turkish answer | 88/88 · 78/85 | 75/88 · 88/91 | 75/85 · 81/88 | 80/87 · 84/86 | 75/83 · 83/84 |
-| Missing detail asked, not guessed (of 12) | 9 · 5 | 7 · 10 | 6 · 8 | **12 · 12** | 12 · 11 |
-| Approval-gated actions (of 27) | 18 · 13 | 22 · 17 | 25 · 26 | 27 · 25 | 26 · 25 |
-| Orders saved with a quantity the user did not say | 0 · 2 | 1 · 2 | 1 · 2 | **0 · 0** | **0 · 0** |
-| Kitchen notes saved that the user never asked for | 0 · 1 | 0 · 1 | 0 · 0 | 1 · 1 | **0 · 0** |
-| Input tokens per case (instructions on) | 19.6k | 22.1k | 23.9k | 21.4k | 21.7k |
+| 40 cases × 3 runs, server instructions on · off | v6.2 | v6.3 | v6.4 | v6.5 | v6.6 | v6.7 |
+|---|---:|---:|---:|---:|---:|---:|
+| Passed (of 120) | 97 · 89 | 97 · 98 | 104 · 101 | 107 · 104 | 107 · 111 | **115 · 108** |
+| English request, English answer | 7/27 · 25/27 | 25/27 · 21/27 | 27/27 · 27/27 | 27/27 · 27/27 | 26/26 · 27/27 | **27/27 · 27/27** |
+| Turkish request, Turkish answer | 88/88 · 78/85 | 75/88 · 88/91 | 75/85 · 81/88 | 80/87 · 84/86 | 75/83 · 83/84 | **86/88 · 81/84** |
+| Missing detail asked, not guessed (of 12) | 9 · 5 | 7 · 10 | 6 · 8 | 12 · 12 | 12 · 11 | **12 · 12** |
+| Approval-gated actions (of 27) | 18 · 13 | 22 · 17 | 25 · 26 | 27 · 25 | 26 · 25 | **27 · 24** |
+| Orders saved with a quantity the user did not say | 0 · 2 | 1 · 2 | 1 · 2 | 0 · 0 | 0 · 0 | **0 · 0** |
+| Kitchen notes saved that the user never asked for | 0 · 1 | 0 · 1 | 0 · 0 | 1 · 1 | 0 · 0 | **0 · 0** |
+| Input tokens per case (instructions on) | 19.6k | 22.1k | 23.9k | 21.4k | 21.7k | 24.1k |
 
 Language counts leave out answers too short to tell ("İskender 620 TL.").
 
@@ -487,10 +487,27 @@ Language counts leave out answers too short to tell ("İskender 620 TL.").
   were fixed. Notes must come from the user's words: the model had written `soğansız`, once
   as `soğansız (if stated by the user)`, into orders where nobody asked for it.
 
-Still failing in v6.6: with instructions on, Turkish questions are sometimes answered in
-English, mostly about reports and tables (8 of its 13 failures; read tools do not see the
-user's message), report arguments left out (`limit`, `group_by`), and once a "paket
-servis" order sent without `channel=takeaway`, so the server asked which table.
+- **v6.7: the server also reads the table name, and catches a negated "no".** Read tools
+  (reports, `get_order`) now take an optional `user_message` too, so a report answer can
+  carry a language reminder the same way write tools do. "Paket servis: 3 acısız lahmacun"
+  (no table given) now opens as takeaway on its own instead of asking which table. Two
+  security findings from live adversarial testing were also fixed here: (1) `create_order`
+  and `add_items_to_order` checked every other field against the user's own words except
+  the table — asked for "Teras 2", sent `table_name="Salon 4"`, and the order opened on
+  Salon 4 without a peep; both now refuse when the table in `table_name`/`table_id`
+  disagrees with the one actually named in `user_message`. (2) `confirmation.py`'s yes/no
+  check did not recognise Turkish's negative verb suffix (`-ma-/-me-`): "onaylamıyorum" (*I
+  do not approve*) contains "onay", which the old code read as approval, so cancellations
+  and voids ran even on an explicit refusal. Both were caught by asking the model itself to
+  "try to make the tool fail" against the live server, not by any scripted test — the gap
+  did not show up in regular use and no automated eval would have found it either; the
+  fixes brought passes with instructions on from 107 to 115 of 120.
+
+Still failing in v6.7: with instructions on, Turkish questions are still sometimes
+answered in English (reports and inventory), report arguments left out (`limit`,
+`group_by`, `sort`), and a wrong table id guessed instead of looked up
+(`write-reserve-table`). Without instructions, the model still sometimes resends a
+quantity-mismatched order with the count hidden in a note instead of fixing it.
 
 A small local model can still claim success without calling a tool at all (seen once, after
 LM Studio itself rejected a 100% discount). No server can see that, so with local models,
@@ -507,7 +524,7 @@ check the order in the POS, not the chat.
 - [ ] Eval the preview + token approval path (clients without approval prompts)
 - [x] Measure v5 / v6 (English cases, names in order lines, table-based orders)
 - [x] Measure v6.2
-- [x] Measure v6.3 – v6.6 with and without server instructions (language, the user's words)
+- [x] Measure v6.3 – v6.7 with and without server instructions (language, the user's words)
 - [ ] More models in the comparison
 - [ ] Authentication, then a read-only connection to a real POS
 - [x] Demo video
