@@ -157,7 +157,7 @@ authentication.
 git clone https://github.com/serdarpolat/restaurant-mcp-server
 cd restaurant-mcp-server
 uv sync --extra dev
-uv run pytest                 # 153 tests
+uv run pytest                 # 181 tests
 uv run restaurant-pos-api     # http://127.0.0.1:8000/docs
 uv run restaurant-pos-mcp     # MCP server over stdio
 ```
