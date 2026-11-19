@@ -503,7 +503,7 @@ async def test_a_token_does_not_run_the_action_when_the_user_said_no(pos_api):
         async def status():
             return data(await client.call_tool("get_order", {"order_id": order["id"]}))["status"]
 
-        for reply in ("Hayır, tüm siparişi iptal etme!", "wait", None, "hmm"):
+        for reply in ("Hayır, tüm siparişi iptal etme!", "onaylamıyorum", "wait", None, "hmm"):
             token = data(await client.call_tool("cancel_order", args))["confirmation_token"]
             sent = args | {"confirmation_token": token}
             if reply is not None:
@@ -529,6 +529,28 @@ async def test_a_token_does_not_run_the_action_when_the_user_said_no(pos_api):
         token = data(await client.call_tool("cancel_order", args))["confirmation_token"]
         done = args | {"confirmation_token": token, "user_reply": "CONFIRM"}
         assert data(await client.call_tool("cancel_order", done))["status"] == "cancelled"
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "onaylamıyorum",  # bare "etme"/"yapma" aren't the only negative forms: Turkish
+        "onaylamayın",  # negates a verb with an infix ("-ma-/-me-"), not a separate word
+        "onaylamadım",  # like English "not" - these all contain _YES's own "onay", and
+        "hiç onaylamıyorum bunu",  # none of them is "Hayır, ... iptal etme!", the one
+        "kabul etmiyorum",  # phrasing the original LM Studio bug report happened to use.
+        "kabul etmeyin",
+        "kabul etmem",
+        "yapmayın",
+        "istemiyorum",
+    ],
+)
+def test_turkish_negated_verbs_are_not_mistaken_for_approval(reply):
+    """A gap found by reading confirmation.py, not from a bug report: each of these reads
+    as a refusal to a person, but used to come back approved() == True."""
+    from pos_mcp.confirmation import approves
+
+    assert not approves(reply), reply
 
 
 # --------------------------------------------------------------------------- #

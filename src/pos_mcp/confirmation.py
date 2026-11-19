@@ -136,9 +136,23 @@ def _issue(action: str, args: dict[str, Any], preview: str, why: str | None) -> 
 
 
 # Normalized words. A refusal anywhere wins over a yes ("evet, ama iptal etme" = no).
+#
+# Turkish negates a verb with an infix ("-ma-/-me-"), not a separate word like English
+# "not" - so "onaylamıyorum" contains _YES's own "onay" and, without the forms below, no
+# _NO word either, and used to come back approved. Found by reviewing this file, not from
+# a test report: the only tested refusal ("Hayır, ... iptal etme!") happens to use the one
+# negative form ("etme") that IS a bare word, which hid the gap. Enumerated per verb
+# (progressive, formal/plural imperative, past, "I won't") rather than one generic
+# "any -m[ae]- infix" pattern, which would also catch unrelated words ("tamam" itself
+# contains "mam").
 _NO = re.compile(
-    r"\b(hayir|yok|etme|yapma|vazgec|dur|bekle|no|nope|dont|don't|do not|not|"
-    r"never|stop|wait|cancel that|nein|non|nicht)\b"
+    r"\b(hayir|yok|etme|yapma|vazgec|dur|bekle|olmaz|"
+    r"onaylami\w*|onaylamayin\w*|onaylamadi\w*|onaylamam\b|"
+    r"kabul etmiyor\w*|kabul etmeyin\w*|kabul etmedi\w*|kabul etmem\b|"
+    r"yapmiyor\w*|yapmayin\w*|yapmadi\w*|yapmam\b|"
+    r"etmiyor\w*|etmeyin\w*|etmedi\w*|etmem\b|"
+    r"istemiyor\w*|istemeyin\w*|istemedi\w*|istemem\b|"
+    r"no|nope|dont|don't|do not|not|never|stop|wait|cancel that|nein|non|nicht)\b"
 )
 _YES = re.compile(
     r"\b(evet|onay\w*|tamam|olur|peki|kabul|yap|yes|yep|yeah|ok|okay|confirm\w*|"
