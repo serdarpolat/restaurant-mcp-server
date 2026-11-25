@@ -747,6 +747,23 @@ def _check_table_said(
         )
 
 
+async def _check_order_table_said(user_message: str, order: dict[str, Any]) -> None:
+    """The cancel/void/pay tools take order_id, not table_name, so _check_table_said's
+    guard never runs for them - a stale or hallucinated order_id from earlier in the chat
+    can silently act on the wrong table's order ("cancel the order on Bahçe 2" acting on an
+    order_id that is actually Salon 3's, found live: order_id carried over from a previous
+    turn, no table ever opened on the table the user actually named). Same conservative
+    rule as _check_table_said: only an unambiguous OTHER table blocks the call."""
+    tables = await api.get("/tables")
+    said = table_from_message(user_message, [t["name"] for t in tables])
+    if said and not same_table(said, order["table"] or ""):
+        raise _refuse(
+            f"The user said '{said}', but order #{order['id']} is on {_where(order)}. Check "
+            "you have the right order_id (list_tables.open_order_id, or "
+            "get_order(table_name=...))."
+        )
+
+
 TableName = Annotated[
     str | None,
     Field(
@@ -984,6 +1001,7 @@ async def approve_void(
     i18n.use(user_message, reply_language)
     order = await api.get(f"/orders/{order_id}")
     _open_order(order)
+    await _check_order_table_said(user_message, order)
     active = [i for i in order["items"] if i["status"] == "active"]
     line = next((i for i in active if i["id"] == order_item_id), None)
     if line is None:
@@ -1053,6 +1071,7 @@ async def approve_cancel(
     i18n.use(user_message, reply_language)
     order = await api.get(f"/orders/{order_id}")
     _open_order(order)
+    await _check_order_table_said(user_message, order)
     preview = i18n.t(
         "cancel_preview",
         order_id=order_id,
@@ -1105,6 +1124,7 @@ async def approve_payment(
     i18n.use(user_message, reply_language)
     order = await api.get(f"/orders/{order_id}")
     _open_order(order)
+    await _check_order_table_said(user_message, order)
     if discount_percent and not (discount_reason or "").strip():
         raise _refuse("A discount needs discount_reason. Ask the user why, then call again.")
     due = order["subtotal"] * (1 - discount_percent / 100)

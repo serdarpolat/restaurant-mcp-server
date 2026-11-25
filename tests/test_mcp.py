@@ -511,6 +511,67 @@ async def test_a_table_the_user_did_not_say_is_refused(pos_api):
         assert ok2["table"] == "Teras 2"
 
 
+async def test_cancel_void_pay_are_checked_against_the_table_the_user_said(pos_api):
+    """Found testing live: create_order/add_items_to_order check table_name against the
+    user's words (test_a_table_the_user_did_not_say_is_refused above), but cancel_order,
+    void_order_item and pay_order take order_id, not table_name, so that guard never ran
+    for them. A stale or hallucinated order_id from earlier in the chat could act on the
+    wrong table's order: "cancel the order on Bahçe 2" ran against an order_id that was
+    actually Salon 3's, with no table ever opened on Bahçe 2 at all."""
+    async with Client(mcp) as client:
+        order = data(
+            await client.call_tool(
+                "create_order",
+                {
+                    "table_name": "Salon 4",
+                    "items": [{"name": "Ayran", "quantity": 1}],
+                    "user_message": "Salon 4'e 1 ayran aç.",
+                },
+            )
+        )
+        line_id = order["items"][0]["id"]
+        args = {"order_id": order["id"], "reason": "x"}
+
+        wrong_void, text = await call(
+            client,
+            "void_order_item",
+            {
+                **args,
+                "order_item_id": line_id,
+                "user_message": "Remove the ayran from the order on Teras 2.",
+            },
+        )
+        assert wrong_void.is_error
+        assert "user said 'Teras 2'" in text and f"order #{order['id']}" in text
+
+        wrong_cancel, text = await call(
+            client, "cancel_order", {**args, "user_message": "Cancel the order on Teras 2."}
+        )
+        assert wrong_cancel.is_error and "user said 'Teras 2'" in text
+
+        wrong_pay, text = await call(
+            client,
+            "pay_order",
+            {
+                "order_id": order["id"],
+                "method": "cash",
+                "user_message": "Take cash for the Teras 2 bill.",
+            },
+        )
+        assert wrong_pay.is_error and "user said 'Teras 2'" in text
+
+        # the matching table still works, and still asks for approval as usual
+        ok = data(
+            await client.call_tool(
+                "cancel_order", {**args, "user_message": "Cancel the order on Salon 4."}
+            )
+        )
+        assert ok["status"] == "confirmation_required"
+        # a message naming no table at all is never held against the real order_id
+        ok2 = data(await client.call_tool("cancel_order", {**args, "user_message": "Cancel it."}))
+        assert ok2["status"] == "confirmation_required"
+
+
 async def test_table_names_match_whole_words(pos_api):
     async with Client(mcp) as client:
         tables = data(await client.call_tool("list_tables", {}))
