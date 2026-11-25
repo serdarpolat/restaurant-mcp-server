@@ -1,0 +1,34 @@
+[
+  {
+    "id": 1,
+    "name": "Soups"
+  },
+  {
+    "id": 2,
+    "name": "Starters"
+  },
+  {
+    "id": 3,
+    "name": "Kebabs"
+  },
+  {
+    "id": 4,
+    "name": "Grills"
+  },
+  {
+    "id": 5,
+    "name": "Flatbreads"
+  },
+  {
+    "id": 6,
+    "name": "Salads"
+  },
+  {
+    "id": 7,
+    "name": "Desserts"
+  },
+  {
+    "id": 8,
+    "name": "Beverages"
+  }
+]

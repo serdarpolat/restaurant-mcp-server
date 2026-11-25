@@ -1,0 +1,261 @@
+[
+  {
+    "id": 1,
+    "category_id": 1,
+    "name": "Lentil Soup",
+    "description": "Served with butter and lemon.",
+    "price": 150
+  },
+  {
+    "id": 2,
+    "category_id": 1,
+    "name": "Ezogelin Soup",
+    "description": "Traditional soup with bulgur and mint.",
+    "price": 150
+  },
+  {
+    "id": 3,
+    "category_id": 1,
+    "name": "Yayla Soup",
+    "description": "Yogurt soup with rice and mint.",
+    "price": 160
+  },
+  {
+    "id": 4,
+    "category_id": 2,
+    "name": "Haydari",
+    "description": "Strained yogurt with garlic and mint.",
+    "price": 140
+  },
+  {
+    "id": 5,
+    "category_id": 2,
+    "name": "Spicy Ezme",
+    "description": "Finely chopped tomato, pepper and onion.",
+    "price": 130
+  },
+  {
+    "id": 6,
+    "category_id": 2,
+    "name": "Stuffed Bulgur Balls",
+    "description": "Priced per piece.",
+    "price": 90
+  },
+  {
+    "id": 7,
+    "category_id": 3,
+    "name": "Adana Kebab",
+    "description": "Spicy minced lamb, flatbread, grilled tomato.",
+    "price": 560
+  },
+  {
+    "id": 8,
+    "category_id": 3,
+    "name": "Urfa Kebab",
+    "description": "Mild minced lamb, flatbread, grilled vegetables.",
+    "price": 560
+  },
+  {
+    "id": 9,
+    "category_id": 3,
+    "name": "Beyti Kebab",
+    "description": "Wrapped in flatbread, yogurt and butter.",
+    "price": 640
+  },
+  {
+    "id": 10,
+    "category_id": 3,
+    "name": "Iskender Kebab",
+    "description": "Lamb over flatbread, tomato sauce, yogurt.",
+    "price": 620
+  },
+  {
+    "id": 11,
+    "category_id": 3,
+    "name": "Eggplant Kebab",
+    "description": "Eggplant and minced meat skewer.",
+    "price": 600
+  },
+  {
+    "id": 12,
+    "category_id": 3,
+    "name": "Ali Nazik",
+    "description": "Lamb over smoky eggplant yogurt puree.",
+    "price": 650
+  },
+  {
+    "id": 13,
+    "category_id": 3,
+    "name": "Lamb Shish",
+    "description": "Marinated cubed lamb.",
+    "price": 720
+  },
+  {
+    "id": 14,
+    "category_id": 3,
+    "name": "Chicken Shish",
+    "description": "Marinated chicken thigh.",
+    "price": 420
+  },
+  {
+    "id": 15,
+    "category_id": 3,
+    "name": "Chicken Wings",
+    "description": "Grilled spiced wings.",
+    "price": 400
+  },
+  {
+    "id": 16,
+    "category_id": 3,
+    "name": "Mixed Grill",
+    "description": "Adana, lamb shish and chicken shish together.",
+    "price": 950
+  },
+  {
+    "id": 17,
+    "category_id": 4,
+    "name": "Lamb Chops",
+    "description": "Grilled lamb chops with rice.",
+    "price": 950
+  },
+  {
+    "id": 18,
+    "category_id": 4,
+    "name": "Grilled Meatballs",
+    "description": "Homemade meatballs, rice and bean salad.",
+    "price": 480
+  },
+  {
+    "id": 19,
+    "category_id": 4,
+    "name": "Cheese-Stuffed Meatballs",
+    "description": "Meatballs stuffed with cheese.",
+    "price": 520
+  },
+  {
+    "id": 20,
+    "category_id": 5,
+    "name": "Lahmacun",
+    "description": "Thin dough, minced meat topping, greens.",
+    "price": 160
+  },
+  {
+    "id": 21,
+    "category_id": 5,
+    "name": "Minced Meat Pide",
+    "description": "Stone-oven pide with minced meat.",
+    "price": 380
+  },
+  {
+    "id": 22,
+    "category_id": 5,
+    "name": "Cheese Pide",
+    "description": "Pide loaded with cheese.",
+    "price": 340
+  },
+  {
+    "id": 23,
+    "category_id": 5,
+    "name": "Diced Lamb Pide",
+    "description": "Pide with diced lamb.",
+    "price": 450
+  },
+  {
+    "id": 24,
+    "category_id": 5,
+    "name": "Mixed Pide",
+    "description": "Minced meat, cheese and egg.",
+    "price": 460
+  },
+  {
+    "id": 25,
+    "category_id": 6,
+    "name": "Shepherd's Salad",
+    "description": "Tomato, cucumber, pepper, onion, parsley.",
+    "price": 150
+  },
+  {
+    "id": 26,
+    "category_id": 6,
+    "name": "Gavurdagi Salad",
+    "description": "With walnuts and pomegranate sauce.",
+    "price": 190
+  },
+  {
+    "id": 27,
+    "category_id": 7,
+    "name": "Kunefe",
+    "description": "Hatay style, served hot.",
+    "price": 280
+  },
+  {
+    "id": 28,
+    "category_id": 7,
+    "name": "Pistachio Baklava",
+    "description": "4 pieces, with Antep pistachio.",
+    "price": 340
+  },
+  {
+    "id": 29,
+    "category_id": 7,
+    "name": "Rice Pudding",
+    "description": "Baked rice pudding.",
+    "price": 160
+  },
+  {
+    "id": 30,
+    "category_id": 8,
+    "name": "Ayran",
+    "description": "Churned yogurt drink.",
+    "price": 50
+  },
+  {
+    "id": 31,
+    "category_id": 8,
+    "name": "Cola",
+    "description": "330 ml can.",
+    "price": 80
+  },
+  {
+    "id": 32,
+    "category_id": 8,
+    "name": "Water",
+    "description": "500 ml.",
+    "price": 25
+  },
+  {
+    "id": 33,
+    "category_id": 8,
+    "name": "Turnip Juice",
+    "description": "Spicy or mild.",
+    "price": 60
+  },
+  {
+    "id": 34,
+    "category_id": 8,
+    "name": "Soda",
+    "description": "200 ml.",
+    "price": 50
+  },
+  {
+    "id": 35,
+    "category_id": 8,
+    "name": "Lemonade",
+    "description": "Homemade, with fresh mint.",
+    "price": 90
+  },
+  {
+    "id": 36,
+    "category_id": 8,
+    "name": "Tea",
+    "description": "Served in a slim glass.",
+    "price": 30
+  },
+  {
+    "id": 37,
+    "category_id": 8,
+    "name": "Turkish Coffee",
+    "description": "Served with Turkish delight.",
+    "price": 90
+  }
+]

@@ -1,0 +1,22 @@
+[
+  {
+    "id": 1,
+    "name": "cash"
+  },
+  {
+    "id": 2,
+    "name": "credit_card"
+  },
+  {
+    "id": 3,
+    "name": "meal_voucher"
+  },
+  {
+    "id": 4,
+    "name": "apple_pay"
+  },
+  {
+    "id": 5,
+    "name": "google_pay"
+  }
+]

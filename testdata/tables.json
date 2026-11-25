@@ -1,0 +1,92 @@
+[
+  {
+    "id": 1,
+    "name": "Hall 1",
+    "area": "Hall",
+    "capacity": 2
+  },
+  {
+    "id": 2,
+    "name": "Hall 2",
+    "area": "Hall",
+    "capacity": 2
+  },
+  {
+    "id": 3,
+    "name": "Hall 3",
+    "area": "Hall",
+    "capacity": 4
+  },
+  {
+    "id": 4,
+    "name": "Hall 4",
+    "area": "Hall",
+    "capacity": 4
+  },
+  {
+    "id": 5,
+    "name": "Hall 5",
+    "area": "Hall",
+    "capacity": 4
+  },
+  {
+    "id": 6,
+    "name": "Hall 6",
+    "area": "Hall",
+    "capacity": 6
+  },
+  {
+    "id": 7,
+    "name": "Hall 7",
+    "area": "Hall",
+    "capacity": 6
+  },
+  {
+    "id": 8,
+    "name": "Hall 8",
+    "area": "Hall",
+    "capacity": 8
+  },
+  {
+    "id": 9,
+    "name": "Garden 1",
+    "area": "Garden",
+    "capacity": 2
+  },
+  {
+    "id": 10,
+    "name": "Garden 2",
+    "area": "Garden",
+    "capacity": 4
+  },
+  {
+    "id": 11,
+    "name": "Garden 3",
+    "area": "Garden",
+    "capacity": 4
+  },
+  {
+    "id": 12,
+    "name": "Garden 4",
+    "area": "Garden",
+    "capacity": 4
+  },
+  {
+    "id": 13,
+    "name": "Garden 5",
+    "area": "Garden",
+    "capacity": 6
+  },
+  {
+    "id": 14,
+    "name": "Terrace 1",
+    "area": "Terrace",
+    "capacity": 4
+  },
+  {
+    "id": 15,
+    "name": "Terrace 2",
+    "area": "Terrace",
+    "capacity": 6
+  }
+]

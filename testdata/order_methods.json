@@ -1,0 +1,14 @@
+[
+  {
+    "id": 1,
+    "name": "delivery"
+  },
+  {
+    "id": 2,
+    "name": "pickup"
+  },
+  {
+    "id": 3,
+    "name": "dineIn"
+  }
+]
