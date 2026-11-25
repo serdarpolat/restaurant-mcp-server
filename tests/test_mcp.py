@@ -241,6 +241,12 @@ async def test_impossible_dates_are_refused_with_a_hint(pos_api):
         week = data(
             await client.call_tool("get_void_report", {"date_from": "-7", "date_to": "today"})
         )
+        reversed_orders = await client.call_tool(
+            "list_orders", {"date_from": today, "date_to": "-7"}
+        )
+        reversed_top = await client.call_tool(
+            "get_top_items", {"date_from": today, "date_to": "yesterday"}
+        )
     assert old.is_error and f"Did you mean {today}" in old.content[0].text
     assert future.is_error and today in future.content[0].text
     assert bad.is_error and "YYYY-MM-DD" in bad.content[0].text
@@ -249,6 +255,11 @@ async def test_impossible_dates_are_refused_with_a_hint(pos_api):
     assert yesterday["period"] == {"date_from": day_before, "date_to": day_before}
     week_ago = (date.fromisoformat(today) - timedelta(days=7)).isoformat()
     assert week["period"] == {"date_from": week_ago, "date_to": today}
+    # a reversed range is refused, not silently swapped (it used to just swap the two)
+    assert reversed_orders.is_error
+    assert "date_from" in reversed_orders.content[0].text
+    assert "date_to" in reversed_orders.content[0].text
+    assert reversed_top.is_error and "date_to" in reversed_top.content[0].text
 
 
 async def test_ids_are_checked_against_the_name_the_user_said(pos_api):
@@ -618,6 +629,30 @@ async def test_a_token_does_not_run_the_action_when_the_user_said_no(pos_api):
 def test_turkish_negated_verbs_are_not_mistaken_for_approval(reply):
     """A gap found by reading confirmation.py, not from a bug report: each of these reads
     as a refusal to a person, but used to come back approved() == True."""
+    from pos_mcp.confirmation import approves
+
+    assert not approves(reply), reply
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "evet ama iptal etme",  # a "yes" followed by a refusal of the actual action: a
+        "evet ama onaylamıyorum, vazgeçtim",  # person reading this would not take it as
+        "tamam ama yapma",  # approval, and a model could otherwise read the bare "evet"/
+        "onaylıyorum ama hayır",  # "tamam"/"onaylıyorum" and run the action anyway.
+        "yes but actually don't void it, I changed my mind again",
+        "yes but no, cancel that",
+        "sure, but don't do it",
+    ],
+)
+def test_a_yes_followed_by_a_refusal_is_not_approved(reply):
+    """'Evet ama iptal etme' / "yes but don't do it": a live adversarial test tried to send
+    this to a real confirmation preview to check it, but could not (fabricating a user's
+    approval reply is correctly refused by the calling agent's own permission layer).
+    Covered here directly against approves() instead; the module docstring already claims
+    "a refusal anywhere wins over a yes" (confirmation.py:138) but this exact compound
+    pattern had no test of its own."""
     from pos_mcp.confirmation import approves
 
     assert not approves(reply), reply

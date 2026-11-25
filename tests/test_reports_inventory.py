@@ -37,6 +37,13 @@ def test_staff_report_sorted_by_revenue(client):
     assert rows[0]["revenue"] >= rows[-1]["revenue"]
 
 
+def test_reversed_date_range_is_refused_not_swapped(client):
+    reversed_range = {"date_from": WEEK["date_to"], "date_to": WEEK["date_from"]}
+    r = client.get("/reports/sales", params=reversed_range | {"group_by": "day"})
+    assert r.status_code == 422
+    assert "date_from" in r.json()["detail"] and "date_to" in r.json()["detail"]
+
+
 def test_low_stock_and_purchase(client):
     low = client.get("/inventory/ingredients", params={"below_reorder": True}).json()
     assert low, "seed data should leave some ingredients below reorder level"

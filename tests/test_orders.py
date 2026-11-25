@@ -247,3 +247,9 @@ def test_missing_required_option_says_ask_the_user(client):
     )
     assert r.status_code == 422
     assert "do not choose for them" in r.json()["detail"]
+
+
+def test_reversed_date_range_is_refused_not_swapped(client):
+    r = client.get("/orders", params={"date_from": "2026-11-26", "date_to": "2026-11-20"})
+    assert r.status_code == 422
+    assert "date_from" in r.json()["detail"] and "date_to" in r.json()["detail"]

@@ -3,6 +3,7 @@
 from datetime import UTC, date, datetime, time, timedelta
 
 from pos_api.db.database import RESTAURANT_TZ
+from pos_api.errors import Invalid
 
 
 def now() -> datetime:
@@ -28,11 +29,16 @@ def day_range(start: date, end: date) -> tuple[datetime, datetime]:
 
 
 def resolve_dates(date_from: date | None, date_to: date | None) -> tuple[date, date]:
-    """Default to today; a single bound means a single day."""
+    """Default to today; a single bound means a single day.
+
+    Refuses a reversed range instead of silently swapping the two dates: a model that
+    mixed up which bound is which should be told, not handed a result for a range it
+    never asked for.
+    """
     if date_from is None and date_to is None:
         return today(), today()
     date_from = date_from or date_to
     date_to = date_to or date_from
     if date_from > date_to:
-        date_from, date_to = date_to, date_from
+        raise Invalid(f"date_from ({date_from}) is after date_to ({date_to}). Swap them.")
     return date_from, date_to
