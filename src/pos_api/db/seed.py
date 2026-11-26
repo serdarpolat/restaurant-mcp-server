@@ -1,4 +1,4 @@
-"""Generate a realistic, reproducible dataset for a Turkish kebab restaurant.
+"""Generate a realistic, reproducible dataset for a kebab restaurant.
 
 The data is synthetic but follows real-world patterns so that analytical
 questions have meaningful answers:
@@ -6,11 +6,13 @@ questions have meaningful answers:
 - Lunch (12-14) and dinner (19-21) peaks; busier Fridays and weekends.
 - Seasonality: cold drinks fade and soups/tea rise as summer turns to autumn.
 - A menu-wide price increase ~45 days ago (historical prices are preserved).
-- "Beyti" is a rising star; one waiter consistently outsells the others.
+- "Beyti Kebab" is a rising star; one waiter consistently outsells the others.
 - A public holiday (Oct 29) with a traffic spike.
 - ~1.5% voided items and ~1.5% cancelled orders, with reasons.
 - A full stock ledger (daily sales, purchases, waste). A few ingredients end
   below their reorder level because of a supplier delay in the last days.
+- Every order belongs to a user: a reused registered customer (70%) or a
+  fresh one-off guest checkout (30%, no persistent guest identity).
 - Today's data stops at the current time, with a few tables still open.
 
 Usage:
@@ -57,6 +59,8 @@ from pos_api.db.models import (
     StockMovement,
     StockReason,
     TableStatus,
+    User,
+    UserType,
 )
 from pos_api.stock import COUNT_UNITS, line_consumption, portion_multiplier
 
@@ -66,7 +70,8 @@ BASE_ORDERS_PER_DAY = 95
 PRICE_INCREASE_DAYS_AGO = 45
 PRICE_INCREASE_RATE = Decimal("1.08")
 SUPPLIER_DELAY_DAYS = 5
-DELAYED_INGREDIENTS = {"Dana Kıyma", "Lavaş", "Patlıcan"}
+DELAYED_INGREDIENTS = {"Ground Beef", "Flatbread", "Eggplant"}
+N_REGISTERED_USERS = 150
 
 D = Decimal
 
@@ -84,82 +89,96 @@ def q3(value: Decimal) -> Decimal:
 # --------------------------------------------------------------------------- #
 
 STAFF = [
-    ("Mehmet Yılmaz", StaffRole.manager),
-    ("Ayşe Demir", StaffRole.cashier),
-    ("Emre Kaya", StaffRole.waiter),
-    ("Zeynep Çelik", StaffRole.waiter),
-    ("Burak Şahin", StaffRole.waiter),
-    ("Elif Arslan", StaffRole.waiter),
-    ("Can Öztürk", StaffRole.waiter),
-    ("Selin Aydın", StaffRole.waiter),
+    ("James Wilson", StaffRole.manager),
+    ("Patricia Moore", StaffRole.cashier),
+    ("Daniel Carter", StaffRole.waiter),
+    ("Olivia Bennett", StaffRole.waiter),
+    ("Ryan Mitchell", StaffRole.waiter),
+    ("Sophia Turner", StaffRole.waiter),
+    ("Ethan Brooks", StaffRole.waiter),
+    ("Grace Foster", StaffRole.waiter),
 ]
-# Relative share of tables each waiter serves (Emre is the star performer).
+# Relative share of tables each waiter serves (Daniel is the star performer).
 WAITER_WEIGHTS = {
-    "Emre Kaya": 1.6,
-    "Zeynep Çelik": 1.2,
-    "Burak Şahin": 1.0,
-    "Elif Arslan": 1.0,
-    "Can Öztürk": 0.8,
-    "Selin Aydın": 0.9,
+    "Daniel Carter": 1.6,
+    "Olivia Bennett": 1.2,
+    "Ryan Mitchell": 1.0,
+    "Sophia Turner": 1.0,
+    "Ethan Brooks": 0.8,
+    "Grace Foster": 0.9,
 }
 
 TABLES = (
-    [(f"Salon {i}", "Salon", c) for i, c in enumerate([2, 2, 4, 4, 4, 6, 6, 8], start=1)]
-    + [(f"Bahçe {i}", "Bahçe", c) for i, c in enumerate([2, 4, 4, 4, 6], start=1)]
-    + [(f"Teras {i}", "Teras", c) for i, c in enumerate([4, 6], start=1)]
+    [(f"Hall {i}", "Hall", c) for i, c in enumerate([2, 2, 4, 4, 4, 6, 6, 8], start=1)]
+    + [(f"Garden {i}", "Garden", c) for i, c in enumerate([2, 4, 4, 4, 6], start=1)]
+    + [(f"Terrace {i}", "Terrace", c) for i, c in enumerate([4, 6], start=1)]
 )
+
+FIRST_NAMES = [
+    "James", "Mary", "John", "Patricia", "Robert", "Jennifer", "Michael", "Linda",
+    "David", "Elizabeth", "William", "Barbara", "Richard", "Susan", "Joseph", "Jessica",
+    "Thomas", "Sarah", "Charles", "Karen", "Daniel", "Nancy", "Matthew", "Lisa",
+    "Anthony", "Betty", "Mark", "Margaret", "Donald", "Sandra", "Steven", "Ashley",
+    "Paul", "Kimberly", "Andrew", "Emily", "Joshua", "Donna", "Kevin", "Michelle",
+]  # fmt: skip
+LAST_NAMES = [
+    "Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis",
+    "Rodriguez", "Martinez", "Hernandez", "Lopez", "Gonzalez", "Wilson", "Anderson",
+    "Thomas", "Taylor", "Moore", "Jackson", "Martin", "Lee", "Perez", "Thompson",
+    "White", "Harris", "Sanchez", "Clark", "Ramirez", "Lewis", "Robinson",
+]  # fmt: skip
 
 # name: (unit, unit_cost)
 INGREDIENTS = {
-    "Dana Kıyma": ("kg", 650),
-    "Kuzu Eti": ("kg", 900),
-    "Kuzu Pirzola": ("kg", 1400),
-    "Tavuk But": ("kg", 280),
-    "Lavaş": ("adet", 6),
-    "Pide Hamuru": ("adet", 12),
-    "Lahmacun Hamuru": ("adet", 8),
-    "Kaşar Peyniri": ("kg", 450),
-    "Yumurta": ("adet", 6),
-    "Kırmızı Mercimek": ("kg", 90),
+    "Ground Beef": ("kg", 650),
+    "Lamb Meat": ("kg", 900),
+    "Lamb Chops (raw)": ("kg", 1400),
+    "Chicken Thigh": ("kg", 280),
+    "Flatbread": ("piece", 6),
+    "Pide Dough": ("piece", 12),
+    "Lahmacun Dough": ("piece", 8),
+    "Kashar Cheese": ("kg", 450),
+    "Egg": ("piece", 6),
+    "Red Lentils": ("kg", 90),
     "Bulgur": ("kg", 50),
-    "Pirinç": ("kg", 70),
-    "Domates": ("kg", 40),
-    "Soğan": ("kg", 25),
-    "Sivri Biber": ("kg", 60),
-    "Patlıcan": ("kg", 50),
-    "Maydanoz": ("demet", 15),
-    "Limon": ("kg", 60),
-    "Yoğurt": ("kg", 90),
-    "Tereyağı": ("kg", 600),
-    "Künefe (hazır)": ("adet", 90),
-    "Fıstıklı Baklava": ("kg", 1000),
-    "Sütlaç (hazır)": ("adet", 40),
-    "Ayran": ("adet", 15),
-    "Kola": ("adet", 30),
-    "Su": ("adet", 6),
-    "Şalgam": ("adet", 25),
-    "Soda": ("adet", 18),
-    "Çay": ("kg", 400),
-    "Türk Kahvesi": ("kg", 900),
+    "Rice": ("kg", 70),
+    "Tomato": ("kg", 40),
+    "Onion": ("kg", 25),
+    "Green Pepper": ("kg", 60),
+    "Eggplant": ("kg", 50),
+    "Parsley": ("bunch", 15),
+    "Lemon": ("kg", 60),
+    "Yogurt": ("kg", 90),
+    "Butter": ("kg", 600),
+    "Kunefe (ready-made)": ("piece", 90),
+    "Pistachio Baklava (bulk)": ("kg", 1000),
+    "Rice Pudding (ready-made)": ("piece", 40),
+    "Ayran": ("piece", 15),
+    "Cola": ("piece", 30),
+    "Water": ("piece", 6),
+    "Turnip Juice": ("piece", 25),
+    "Soda": ("piece", 18),
+    "Tea": ("kg", 400),
+    "Turkish Coffee": ("kg", 900),
 }
 
 CATEGORIES = [
-    "Çorbalar",
-    "Başlangıçlar",
-    "Kebaplar",
-    "Izgaralar",
-    "Pide & Lahmacun",
-    "Salatalar",
-    "Tatlılar",
-    "İçecekler",
+    "Soups",
+    "Starters",
+    "Kebabs",
+    "Grills",
+    "Flatbreads",
+    "Salads",
+    "Desserts",
+    "Beverages",
 ]
 
 # Modifier groups: name -> (min, max, [(modifier, price_delta)])
 MODIFIER_GROUPS = {
-    "Acı Seviyesi": (1, 1, [("Acılı", 0), ("Az Acılı", 0), ("Acısız", 0)]),
-    "Porsiyon": (0, 1, [("1.5 Porsiyon", 250)]),
-    "Pide Ekstraları": (0, 2, [("Ekstra Kaşar", 60), ("Ekstra Yumurta", 30)]),
-    "Boy": (0, 1, [("Büyük Boy", 20)]),
+    "Spice Level": (1, 1, [("Spicy", 0), ("Mild", 0), ("Not Spicy", 0)]),
+    "Portion": (0, 1, [("1.5 Portion", 250)]),
+    "Pide Extras": (0, 2, [("Extra Cheese", 60), ("Extra Egg", 30)]),
+    "Size": (0, 1, [("Large", 20)]),
 }
 
 
@@ -174,271 +193,286 @@ class ItemSpec:
     groups: list[str] = field(default_factory=list)
 
 
-KEBAB_GROUPS = ["Acı Seviyesi", "Porsiyon"]
+KEBAB_GROUPS = ["Spice Level", "Portion"]
 
 MENU: list[ItemSpec] = [
-    # Çorbalar
+    # Soups
     ItemSpec(
-        "Mercimek Çorbası",
-        "Çorbalar",
+        "Lentil Soup",
+        "Soups",
         150,
-        "Tereyağlı, limonla servis edilir.",
-        {"Kırmızı Mercimek": 0.06, "Soğan": 0.02, "Tereyağı": 0.01, "Limon": 0.02},
+        "Served with butter and lemon.",
+        {"Red Lentils": 0.06, "Onion": 0.02, "Butter": 0.01, "Lemon": 0.02},
         6,
     ),
     ItemSpec(
-        "Ezogelin Çorbası",
-        "Çorbalar",
+        "Ezogelin Soup",
+        "Soups",
         150,
-        "Bulgurlu, naneli geleneksel çorba.",
-        {"Kırmızı Mercimek": 0.05, "Bulgur": 0.02, "Soğan": 0.02},
+        "Traditional soup with bulgur and mint.",
+        {"Red Lentils": 0.05, "Bulgur": 0.02, "Onion": 0.02},
         3,
     ),
     ItemSpec(
-        "Yayla Çorbası",
-        "Çorbalar",
+        "Yayla Soup",
+        "Soups",
         160,
-        "Yoğurtlu, pirinçli, naneli.",
-        {"Yoğurt": 0.1, "Pirinç": 0.02, "Tereyağı": 0.01},
+        "Yogurt soup with rice and mint.",
+        {"Yogurt": 0.1, "Rice": 0.02, "Butter": 0.01},
         2,
     ),
-    # Başlangıçlar
-    ItemSpec("Haydari", "Başlangıçlar", 140, "Süzme yoğurt, sarımsak, nane.", {"Yoğurt": 0.15}, 3),
+    # Starters
+    ItemSpec("Haydari", "Starters", 140, "Strained yogurt, garlic, mint.", {"Yogurt": 0.15}, 3),
     ItemSpec(
-        "Acılı Ezme",
-        "Başlangıçlar",
+        "Spicy Ezme",
+        "Starters",
         130,
-        "İnce kıyılmış domates, biber ve soğan.",
-        {"Domates": 0.1, "Sivri Biber": 0.03, "Soğan": 0.03, "Maydanoz": 0.1},
+        "Finely chopped tomato, pepper and onion.",
+        {"Tomato": 0.1, "Green Pepper": 0.03, "Onion": 0.03, "Parsley": 0.1},
         5,
     ),
     ItemSpec(
-        "İçli Köfte",
-        "Başlangıçlar",
+        "Stuffed Bulgur Balls",
+        "Starters",
         90,
-        "Adet fiyatıdır.",
-        {"Dana Kıyma": 0.03, "Bulgur": 0.05, "Soğan": 0.01},
+        "Priced per piece.",
+        {"Ground Beef": 0.03, "Bulgur": 0.05, "Onion": 0.01},
         3,
     ),
-    # Kebaplar
+    # Kebabs
     ItemSpec(
-        "Adana Kebap",
-        "Kebaplar",
+        "Adana Kebab",
+        "Kebabs",
         560,
-        "Acılı zırh kıyması, lavaş, közlenmiş domates-biber.",
-        {"Dana Kıyma": 0.2, "Lavaş": 1, "Domates": 0.05, "Sivri Biber": 0.03, "Soğan": 0.05},
+        "Spicy ground meat skewer, flatbread, grilled tomato-pepper.",
+        {"Ground Beef": 0.2, "Flatbread": 1, "Tomato": 0.05, "Green Pepper": 0.03, "Onion": 0.05},
         10,
         KEBAB_GROUPS,
     ),
     ItemSpec(
-        "Urfa Kebap",
-        "Kebaplar",
+        "Urfa Kebab",
+        "Kebabs",
         560,
-        "Acısız zırh kıyması, lavaş, közlenmiş sebzeler.",
-        {"Dana Kıyma": 0.2, "Lavaş": 1, "Domates": 0.05, "Sivri Biber": 0.03, "Soğan": 0.05},
+        "Mild ground meat skewer, flatbread, grilled vegetables.",
+        {"Ground Beef": 0.2, "Flatbread": 1, "Tomato": 0.05, "Green Pepper": 0.03, "Onion": 0.05},
         5,
-        ["Porsiyon"],
+        ["Portion"],
     ),
     ItemSpec(
-        "Beyti",
-        "Kebaplar",
+        "Beyti Kebab",
+        "Kebabs",
         640,
-        "Lavaşa sarılı kebap, yoğurt ve tereyağı ile.",
-        {"Dana Kıyma": 0.2, "Lavaş": 2, "Yoğurt": 0.1, "Tereyağı": 0.02},
+        "Kebab wrapped in flatbread, with yogurt and butter.",
+        {"Ground Beef": 0.2, "Flatbread": 2, "Yogurt": 0.1, "Butter": 0.02},
         4,
         KEBAB_GROUPS,
     ),
     ItemSpec(
-        "İskender",
-        "Kebaplar",
+        "Iskender Kebab",
+        "Kebabs",
         620,
-        "Pide üzerinde kuzu, domates sos, yoğurt, tereyağı.",
-        {"Kuzu Eti": 0.2, "Pide Hamuru": 0.5, "Yoğurt": 0.1, "Tereyağı": 0.03, "Domates": 0.05},
+        "Lamb over pide, tomato sauce, yogurt, butter.",
+        {"Lamb Meat": 0.2, "Pide Dough": 0.5, "Yogurt": 0.1, "Butter": 0.03, "Tomato": 0.05},
         6,
-        ["Porsiyon"],
+        ["Portion"],
     ),
     ItemSpec(
-        "Patlıcan Kebabı",
-        "Kebaplar",
+        "Eggplant Kebab",
+        "Kebabs",
         600,
-        "Patlıcan ve kıyma şişte, lavaş ile.",
-        {"Dana Kıyma": 0.18, "Patlıcan": 0.25, "Lavaş": 1, "Domates": 0.05},
+        "Eggplant and ground meat skewer, with flatbread.",
+        {"Ground Beef": 0.18, "Eggplant": 0.25, "Flatbread": 1, "Tomato": 0.05},
         2,
         KEBAB_GROUPS,
     ),
     ItemSpec(
         "Ali Nazik",
-        "Kebaplar",
+        "Kebabs",
         650,
-        "Közlenmiş patlıcanlı yoğurt üzerinde kuzu.",
-        {"Kuzu Eti": 0.18, "Patlıcan": 0.2, "Yoğurt": 0.1, "Tereyağı": 0.02},
+        "Lamb over smoky eggplant-yogurt puree.",
+        {"Lamb Meat": 0.18, "Eggplant": 0.2, "Yogurt": 0.1, "Butter": 0.02},
         2,
     ),
     ItemSpec(
-        "Kuzu Şiş",
-        "Kebaplar",
+        "Lamb Shish",
+        "Kebabs",
         720,
-        "Marine edilmiş kuzu kuşbaşı.",
-        {"Kuzu Eti": 0.22, "Lavaş": 1, "Domates": 0.05, "Sivri Biber": 0.03},
+        "Marinated cubed lamb.",
+        {"Lamb Meat": 0.22, "Flatbread": 1, "Tomato": 0.05, "Green Pepper": 0.03},
         3,
-        ["Porsiyon"],
+        ["Portion"],
     ),
     ItemSpec(
-        "Tavuk Şiş",
-        "Kebaplar",
+        "Chicken Shish",
+        "Kebabs",
         420,
-        "Yoğurtlu marine tavuk but.",
-        {"Tavuk But": 0.22, "Lavaş": 1, "Domates": 0.05, "Sivri Biber": 0.03},
+        "Marinated chicken thigh.",
+        {"Chicken Thigh": 0.22, "Flatbread": 1, "Tomato": 0.05, "Green Pepper": 0.03},
         6,
-        ["Porsiyon"],
+        ["Portion"],
     ),
     ItemSpec(
-        "Tavuk Kanat",
-        "Kebaplar",
+        "Chicken Wings",
+        "Kebabs",
         400,
-        "Közde baharatlı kanat.",
-        {"Tavuk But": 0.3, "Lavaş": 1},
+        "Grilled spiced wings.",
+        {"Chicken Thigh": 0.3, "Flatbread": 1},
         4,
         KEBAB_GROUPS,
     ),
     ItemSpec(
-        "Karışık Izgara",
-        "Kebaplar",
+        "Mixed Grill",
+        "Kebabs",
         950,
-        "Adana, kuzu şiş, tavuk şiş bir arada.",
-        {"Dana Kıyma": 0.1, "Kuzu Eti": 0.1, "Tavuk But": 0.1, "Lavaş": 1, "Domates": 0.05},
+        "Adana, lamb shish and chicken shish together.",
+        {
+            "Ground Beef": 0.1,
+            "Lamb Meat": 0.1,
+            "Chicken Thigh": 0.1,
+            "Flatbread": 1,
+            "Tomato": 0.05,
+        },
         2,
     ),
-    # Izgaralar
+    # Grills
     ItemSpec(
-        "Kuzu Pirzola",
-        "Izgaralar",
+        "Lamb Chops",
+        "Grills",
         950,
-        "Közde kuzu pirzola, pilav ile.",
-        {"Kuzu Pirzola": 0.25, "Pirinç": 0.08, "Tereyağı": 0.01},
+        "Grilled lamb chops with rice.",
+        {"Lamb Chops (raw)": 0.25, "Rice": 0.08, "Butter": 0.01},
         2,
     ),
     ItemSpec(
-        "Izgara Köfte",
-        "Izgaralar",
+        "Grilled Meatballs",
+        "Grills",
         480,
-        "Ev yapımı köfte, piyaz ve pilav ile.",
-        {"Dana Kıyma": 0.2, "Pirinç": 0.08, "Soğan": 0.03},
+        "Homemade meatballs, rice and bean salad.",
+        {"Ground Beef": 0.2, "Rice": 0.08, "Onion": 0.03},
         4,
     ),
     ItemSpec(
-        "Kaşarlı Köfte",
-        "Izgaralar",
+        "Cheese-Stuffed Meatballs",
+        "Grills",
         520,
-        "İçi kaşar dolgulu köfte.",
-        {"Dana Kıyma": 0.2, "Kaşar Peyniri": 0.04, "Pirinç": 0.08},
+        "Meatballs stuffed with cheese.",
+        {"Ground Beef": 0.2, "Kashar Cheese": 0.04, "Rice": 0.08},
         2,
     ),
-    # Pide & Lahmacun
+    # Flatbreads
     ItemSpec(
         "Lahmacun",
-        "Pide & Lahmacun",
+        "Flatbreads",
         160,
-        "İnce hamur, kıymalı harç. Yeşillik ve limonla.",
+        "Thin dough, ground meat topping. Served with greens and lemon.",
         {
-            "Lahmacun Hamuru": 1,
-            "Dana Kıyma": 0.05,
-            "Domates": 0.03,
-            "Soğan": 0.02,
-            "Maydanoz": 0.1,
-            "Limon": 0.02,
+            "Lahmacun Dough": 1,
+            "Ground Beef": 0.05,
+            "Tomato": 0.03,
+            "Onion": 0.02,
+            "Parsley": 0.1,
+            "Lemon": 0.02,
         },
         9,
-        ["Acı Seviyesi"],
+        ["Spice Level"],
     ),
     ItemSpec(
-        "Kıymalı Pide",
-        "Pide & Lahmacun",
+        "Minced Meat Pide",
+        "Flatbreads",
         380,
-        "Taş fırında kıymalı pide.",
-        {"Pide Hamuru": 1, "Dana Kıyma": 0.12, "Domates": 0.03},
+        "Stone-oven pide with minced meat.",
+        {"Pide Dough": 1, "Ground Beef": 0.12, "Tomato": 0.03},
         4,
-        ["Pide Ekstraları"],
+        ["Pide Extras"],
     ),
     ItemSpec(
-        "Kaşarlı Pide",
-        "Pide & Lahmacun",
+        "Cheese Pide",
+        "Flatbreads",
         340,
-        "Bol kaşarlı pide.",
-        {"Pide Hamuru": 1, "Kaşar Peyniri": 0.12},
+        "Pide loaded with cheese.",
+        {"Pide Dough": 1, "Kashar Cheese": 0.12},
         3,
-        ["Pide Ekstraları"],
+        ["Pide Extras"],
     ),
     ItemSpec(
-        "Kuşbaşılı Pide",
-        "Pide & Lahmacun",
+        "Diced Lamb Pide",
+        "Flatbreads",
         450,
-        "Kuzu kuşbaşılı pide.",
-        {"Pide Hamuru": 1, "Kuzu Eti": 0.12, "Domates": 0.03},
+        "Pide with diced lamb.",
+        {"Pide Dough": 1, "Lamb Meat": 0.12, "Tomato": 0.03},
         3,
-        ["Pide Ekstraları"],
+        ["Pide Extras"],
     ),
     ItemSpec(
-        "Karışık Pide",
-        "Pide & Lahmacun",
+        "Mixed Pide",
+        "Flatbreads",
         460,
-        "Kıyma, kaşar ve yumurta.",
-        {"Pide Hamuru": 1, "Dana Kıyma": 0.06, "Kaşar Peyniri": 0.08, "Yumurta": 1},
+        "Minced meat, cheese and egg.",
+        {"Pide Dough": 1, "Ground Beef": 0.06, "Kashar Cheese": 0.08, "Egg": 1},
         3,
-        ["Pide Ekstraları"],
+        ["Pide Extras"],
     ),
-    # Salatalar
+    # Salads
     ItemSpec(
-        "Çoban Salata",
-        "Salatalar",
+        "Shepherd's Salad",
+        "Salads",
         150,
-        "Domates, salatalık, biber, soğan, maydanoz.",
-        {"Domates": 0.2, "Sivri Biber": 0.05, "Soğan": 0.05, "Maydanoz": 0.2},
+        "Tomato, cucumber, pepper, onion, parsley.",
+        {"Tomato": 0.2, "Green Pepper": 0.05, "Onion": 0.05, "Parsley": 0.2},
         5,
     ),
     ItemSpec(
-        "Gavurdağı Salata",
-        "Salatalar",
+        "Gavurdagi Salad",
+        "Salads",
         190,
-        "Cevizli, nar ekşili.",
-        {"Domates": 0.2, "Sivri Biber": 0.05, "Soğan": 0.05, "Maydanoz": 0.2},
+        "With walnuts and pomegranate sauce.",
+        {"Tomato": 0.2, "Green Pepper": 0.05, "Onion": 0.05, "Parsley": 0.2},
         3,
     ),
-    # Tatlılar
-    ItemSpec("Künefe", "Tatlılar", 280, "Hatay usulü, sıcak servis.", {"Künefe (hazır)": 1}, 6),
+    # Desserts
+    ItemSpec("Kunefe", "Desserts", 280, "Hatay style, served hot.", {"Kunefe (ready-made)": 1}, 6),
     ItemSpec(
-        "Fıstıklı Baklava",
-        "Tatlılar",
+        "Pistachio Baklava",
+        "Desserts",
         340,
-        "4 dilim, Antep fıstıklı.",
-        {"Fıstıklı Baklava": 0.12},
+        "4 pieces, with Antep pistachio.",
+        {"Pistachio Baklava (bulk)": 0.12},
         4,
     ),
-    ItemSpec("Sütlaç", "Tatlılar", 160, "Fırın sütlaç.", {"Sütlaç (hazır)": 1}, 3),
-    # İçecekler
-    ItemSpec("Ayran", "İçecekler", 50, "Yayık ayran.", {"Ayran": 1}, 10, ["Boy"]),
-    ItemSpec("Kola", "İçecekler", 80, "330 ml kutu.", {"Kola": 1}, 5),
-    ItemSpec("Su", "İçecekler", 25, "500 ml.", {"Su": 1}, 4),
-    ItemSpec("Şalgam", "İçecekler", 60, "Acılı veya acısız.", {"Şalgam": 1}, 4),
-    ItemSpec("Soda", "İçecekler", 50, "200 ml.", {"Soda": 1}, 2),
-    ItemSpec("Limonata", "İçecekler", 90, "Ev yapımı, taze nane ile.", {"Limon": 0.1}, 2),
-    ItemSpec("Çay", "İçecekler", 30, "İnce belli bardakta.", {"Çay": 0.005}, 6),
-    ItemSpec("Türk Kahvesi", "İçecekler", 90, "Lokum ile.", {"Türk Kahvesi": 0.008}, 2),
+    ItemSpec(
+        "Rice Pudding", "Desserts", 160, "Baked rice pudding.", {"Rice Pudding (ready-made)": 1}, 3
+    ),
+    # Beverages
+    ItemSpec("Ayran", "Beverages", 50, "Churned yogurt drink.", {"Ayran": 1}, 10, ["Size"]),
+    ItemSpec("Cola", "Beverages", 80, "330 ml can.", {"Cola": 1}, 5),
+    ItemSpec("Water", "Beverages", 25, "500 ml.", {"Water": 1}, 4),
+    ItemSpec("Turnip Juice", "Beverages", 60, "Spicy or mild.", {"Turnip Juice": 1}, 4),
+    ItemSpec("Soda", "Beverages", 50, "200 ml.", {"Soda": 1}, 2),
+    ItemSpec("Lemonade", "Beverages", 90, "Homemade, with fresh mint.", {"Lemon": 0.1}, 2),
+    ItemSpec("Tea", "Beverages", 30, "Served in a slim glass.", {"Tea": 0.005}, 6),
+    ItemSpec(
+        "Turkish Coffee",
+        "Beverages",
+        90,
+        "Served with Turkish delight.",
+        {"Turkish Coffee": 0.008},
+        2,
+    ),
 ]
 
-MAINS = {"Kebaplar", "Izgaralar", "Pide & Lahmacun"}
-COLD_DRINKS = {"Ayran", "Kola", "Su", "Şalgam", "Soda", "Limonata"}
+MAINS = {"Kebabs", "Grills", "Flatbreads"}
+COLD_DRINKS = {"Ayran", "Cola", "Water", "Turnip Juice", "Soda", "Lemonade"}
 VOID_REASONS = [
-    "Müşteri vazgeçti",
-    "Yanlış sipariş girildi",
-    "Uzun bekleme süresi",
-    "Ürün beğenilmedi",
+    "Customer changed their mind",
+    "Wrong order entered",
+    "Long wait time",
+    "Item not liked",
 ]
-CANCEL_REASONS = ["Müşteri siparişi iptal etti", "Kurye bulunamadı", "Mükerrer sipariş"]
+CANCEL_REASONS = ["Customer cancelled the order", "Courier not found", "Duplicate order"]
 DISCOUNT_REASONS = [
-    ("Personel indirimi", D("0.20")),
-    ("Sadakat indirimi", D("0.10")),
-    ("Online kampanya", D("0.15")),
+    ("Staff discount", D("0.20")),
+    ("Loyalty discount", D("0.10")),
+    ("Online campaign", D("0.15")),
 ]
 
 WEEKDAY_FACTOR = [0.80, 0.85, 0.90, 0.95, 1.15, 1.40, 1.30]  # Mon..Sun
@@ -457,7 +491,34 @@ HOUR_WEIGHTS = {
     21: 7,
     22: 3,
 }
-HOLIDAYS = {(10, 29): 1.30}  # Cumhuriyet Bayramı
+HOLIDAYS = {(10, 29): 1.30}  # Republic Day (Turkey)
+
+# Order method mix and, per method, the payment method mix (meal vouchers only make
+# sense at the counter; delivery leans on cards and mobile wallets).
+ORDER_METHOD_WEIGHTS = {"dineIn": 65, "pickup": 15, "delivery": 20}
+PAYMENT_WEIGHTS = {
+    OrderChannel.dineIn: {
+        "cash": 30,
+        "credit_card": 55,
+        "meal_voucher": 10,
+        "apple_pay": 3,
+        "google_pay": 2,
+    },
+    OrderChannel.pickup: {
+        "cash": 40,
+        "credit_card": 45,
+        "meal_voucher": 5,
+        "apple_pay": 5,
+        "google_pay": 5,
+    },
+    OrderChannel.delivery: {
+        "cash": 10,
+        "credit_card": 35,
+        "meal_voucher": 0,
+        "apple_pay": 30,
+        "google_pay": 25,
+    },
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -489,7 +550,7 @@ def warmth(day: date) -> float:
 
 
 def old_price(price: Decimal) -> Decimal:
-    """Price before the increase, rounded to the nearest 5 TL."""
+    """Price before the increase, rounded to the nearest 5."""
     raw = price / PRICE_INCREASE_RATE
     return (raw / 5).quantize(D("1"), rounding=ROUND_HALF_UP) * 5
 
@@ -503,6 +564,7 @@ class Ctx:
     waiters: list[Staff]
     cashier: Staff
     tables: list[DiningTable]
+    registered_users: list[User]
     days: int = DAYS
 
 
@@ -520,9 +582,9 @@ def item_weights(ctx: Ctx, categories: set[str], day: date, day_index: int) -> d
         weight = spec.weight
         if name in COLD_DRINKS:
             weight *= 0.6 + 0.8 * w
-        if name == "Çay":
+        if name == "Tea":
             weight *= 0.4 + 1.6 * (1 - w)
-        if name == "Beyti":  # rising star: x1 -> x3 over the period
+        if name == "Beyti Kebab":  # rising star: x1 -> x3 over the period
             weight *= 1 + 2 * day_index / ctx.days
         out[name] = weight
     return out
@@ -533,17 +595,17 @@ def choose_modifiers(ctx: Ctx, spec: ItemSpec) -> list[Modifier]:
     chosen: list[Modifier] = []
     for group in spec.groups:
         mods = {m.name: m for m in ctx.modifiers[group]}
-        if group == "Acı Seviyesi":
-            chosen.append(mods[weighted_pick(rng, {"Acılı": 55, "Az Acılı": 25, "Acısız": 20})])
-        elif group == "Porsiyon" and rng.random() < 0.12:
-            chosen.append(mods["1.5 Porsiyon"])
-        elif group == "Pide Ekstraları":
+        if group == "Spice Level":
+            chosen.append(mods[weighted_pick(rng, {"Spicy": 55, "Mild": 25, "Not Spicy": 20})])
+        elif group == "Portion" and rng.random() < 0.12:
+            chosen.append(mods["1.5 Portion"])
+        elif group == "Pide Extras":
             if rng.random() < 0.15:
-                chosen.append(mods["Ekstra Kaşar"])
+                chosen.append(mods["Extra Cheese"])
             if rng.random() < 0.05:
-                chosen.append(mods["Ekstra Yumurta"])
-        elif group == "Boy" and rng.random() < 0.3:
-            chosen.append(mods["Büyük Boy"])
+                chosen.append(mods["Extra Egg"])
+        elif group == "Size" and rng.random() < 0.3:
+            chosen.append(mods["Large"])
     return chosen
 
 
@@ -551,16 +613,16 @@ def build_basket(ctx: Ctx, channel: OrderChannel, day: date, day_index: int) -> 
     """Return a list of (item_name, quantity, [modifiers])."""
     rng = ctx.rng
     w = warmth(day)
-    if channel == OrderChannel.dine_in:
+    if channel == OrderChannel.dineIn:
         guests = rng.choice([1, 2, 2, 2, 3, 4, 4, 5, 6])
-    elif channel == OrderChannel.takeaway:
+    elif channel == OrderChannel.pickup:
         guests = rng.choice([1, 1, 2, 3])
     else:
         guests = rng.choice([1, 2, 2, 3, 4])
 
     lines: list[tuple] = []
     mains = item_weights(ctx, MAINS, day, day_index)
-    drinks = item_weights(ctx, {"İçecekler"}, day, day_index)
+    drinks = item_weights(ctx, {"Beverages"}, day, day_index)
     cold = {k: v for k, v in drinks.items() if k in COLD_DRINKS}
 
     soup_p = 0.15 + 0.35 * (1 - w)
@@ -572,30 +634,26 @@ def build_basket(ctx: Ctx, channel: OrderChannel, day: date, day_index: int) -> 
             drink = weighted_pick(rng, cold)
             lines.append((drink, 1, choose_modifiers(ctx, ctx.specs[drink])))
         if rng.random() < soup_p:
-            lines.append(
-                (weighted_pick(rng, item_weights(ctx, {"Çorbalar"}, day, day_index)), 1, [])
-            )
-        dessert_p = 0.35 if channel == OrderChannel.dine_in else 0.15
+            lines.append((weighted_pick(rng, item_weights(ctx, {"Soups"}, day, day_index)), 1, []))
+        dessert_p = 0.35 if channel == OrderChannel.dineIn else 0.15
         if rng.random() < dessert_p:
             lines.append(
-                (weighted_pick(rng, item_weights(ctx, {"Tatlılar"}, day, day_index)), 1, [])
+                (weighted_pick(rng, item_weights(ctx, {"Desserts"}, day, day_index)), 1, [])
             )
-        if channel == OrderChannel.dine_in:
+        if channel == OrderChannel.dineIn:
             if rng.random() < 0.35 + 0.4 * (1 - w):
-                lines.append(("Çay", rng.choice([1, 1, 2]), []))
+                lines.append(("Tea", rng.choice([1, 1, 2]), []))
             elif rng.random() < 0.1:
-                lines.append(("Türk Kahvesi", 1, []))
+                lines.append(("Turkish Coffee", 1, []))
 
-    if channel == OrderChannel.dine_in:
+    if channel == OrderChannel.dineIn:
         if rng.random() < 0.5:
             for _ in range(rng.choice([1, 1, 2])):
                 lines.append(
-                    (weighted_pick(rng, item_weights(ctx, {"Başlangıçlar"}, day, day_index)), 1, [])
+                    (weighted_pick(rng, item_weights(ctx, {"Starters"}, day, day_index)), 1, [])
                 )
         if rng.random() < 0.45:
-            lines.append(
-                (weighted_pick(rng, item_weights(ctx, {"Salatalar"}, day, day_index)), 1, [])
-            )
+            lines.append((weighted_pick(rng, item_weights(ctx, {"Salads"}, day, day_index)), 1, []))
 
     # Merge identical lines (same item + same modifiers)
     merged: dict[tuple, list] = {}
@@ -613,12 +671,28 @@ def build_basket(ctx: Ctx, channel: OrderChannel, day: date, day_index: int) -> 
 # --------------------------------------------------------------------------- #
 
 
-def seed_reference_data(session: Session) -> Ctx:
+def seed_reference_data(session: Session, now: datetime) -> Ctx:
+    rng = random.Random(SEED)
+
     staff = [Staff(name=n, role=r) for n, r in STAFF]
     session.add_all(staff)
 
     tables = [DiningTable(name=n, area=a, capacity=c) for n, a, c in TABLES]
     session.add_all(tables)
+
+    registered_users = [
+        User(
+            type=UserType.registered,
+            name=f"{rng.choice(FIRST_NAMES)} {rng.choice(LAST_NAMES)}",
+            email=None,
+            created_at=now - timedelta(days=rng.randint(30, 700)),
+        )
+        for _ in range(N_REGISTERED_USERS)
+    ]
+    session.add_all(registered_users)
+    session.flush()  # need their ids below
+    for i, u in enumerate(registered_users, start=1):
+        u.email = f"{u.name.split()[0].lower()}.{u.name.split()[1].lower()}{i}@example.com"
 
     categories = {name: Category(name=name, sort_order=i) for i, name in enumerate(CATEGORIES)}
     session.add_all(categories.values())
@@ -657,14 +731,27 @@ def seed_reference_data(session: Session) -> Ctx:
     waiters = [s for s in staff if s.role == StaffRole.waiter]
     cashier = next(s for s in staff if s.role == StaffRole.cashier)
     return Ctx(
-        rng=random.Random(SEED),
+        rng=rng,
         items=items,
         specs={s.name: s for s in MENU},
         modifiers=modifiers,
         waiters=waiters,
         cashier=cashier,
         tables=tables,
+        registered_users=registered_users,
     )
+
+
+def _pick_user(ctx: Ctx, session: Session, opened_at: datetime) -> int:
+    """70% of orders come from a reused registered user, 30% a one-off guest
+    checkout (a fresh row, like a real guest checkout has no persistent identity)."""
+    if ctx.rng.random() < 0.7:
+        return ctx.rng.choice(ctx.registered_users).id
+    guest = User(type=UserType.guest, name="Guest", email=None, created_at=opened_at)
+    session.add(guest)
+    session.flush()
+    guest.name = f"Guest {guest.id}"
+    return guest.id
 
 
 def seed_orders(session: Session, ctx: Ctx, now: datetime) -> dict[date, dict[str, Decimal]]:
@@ -689,19 +776,17 @@ def seed_orders(session: Session, ctx: Ctx, now: datetime) -> dict[date, dict[st
             if opened_at > now:
                 continue
 
-            channel = OrderChannel(
-                weighted_pick(rng, {"dine_in": 65, "takeaway": 15, "delivery": 20})
-            )
+            channel = OrderChannel(weighted_pick(rng, ORDER_METHOD_WEIGHTS))
             minutes_open = {
-                OrderChannel.dine_in: (35, 90),
-                OrderChannel.takeaway: (5, 15),
+                OrderChannel.dineIn: (35, 90),
+                OrderChannel.pickup: (5, 15),
                 OrderChannel.delivery: (25, 50),
             }[channel]
             closed_at = opened_at + timedelta(minutes=rng.randint(*minutes_open))
             still_open = closed_at > now
 
             table = None
-            if channel == OrderChannel.dine_in:
+            if channel == OrderChannel.dineIn:
                 candidates = (
                     [t for t in ctx.tables if t.id not in open_tables] if still_open else ctx.tables
                 )
@@ -717,6 +802,7 @@ def seed_orders(session: Session, ctx: Ctx, now: datetime) -> dict[date, dict[st
                 opened_at=opened_at,
                 table_id=table.id if table else None,
                 staff_id=staff.id,
+                user_id=_pick_user(ctx, session, opened_at),
             )
 
             subtotal = D("0")
@@ -807,17 +893,18 @@ def build_lines_cache(items: list[OrderItem], ctx: Ctx) -> list[tuple]:
 def make_payments(
     rng: random.Random, channel: OrderChannel, total: Decimal, paid_at: datetime
 ) -> list[Payment]:
-    if channel == OrderChannel.delivery:
-        method = PaymentMethod.online if rng.random() < 0.85 else PaymentMethod.cash
-        return [Payment(method=method, amount=total, paid_at=paid_at)]
-    card_share = 0.7 if channel == OrderChannel.dine_in else 0.6
-    if channel == OrderChannel.dine_in and total > 400 and rng.random() < 0.08:
+    method = PaymentMethod(weighted_pick(rng, PAYMENT_WEIGHTS[channel]))
+    if (
+        channel == OrderChannel.dineIn
+        and total > 400
+        and method == PaymentMethod.credit_card
+        and rng.random() < 0.08
+    ):
         cash_part = q2(total * D(str(round(rng.uniform(0.3, 0.6), 2))))
         return [
             Payment(method=PaymentMethod.cash, amount=cash_part, paid_at=paid_at),
-            Payment(method=PaymentMethod.card, amount=total - cash_part, paid_at=paid_at),
+            Payment(method=PaymentMethod.credit_card, amount=total - cash_part, paid_at=paid_at),
         ]
-    method = PaymentMethod.card if rng.random() < card_share else PaymentMethod.cash
     return [Payment(method=method, amount=total, paid_at=paid_at)]
 
 
@@ -830,12 +917,12 @@ def seed_stock(
     days = sorted(consumption)
     today = now.date()
     delay_start = today - timedelta(days=SUPPLIER_DELAY_DAYS - 1)
-    perishables = {"Domates", "Maydanoz", "Sivri Biber", "Patlıcan", "Limon"}
+    perishables = {"Tomato", "Parsley", "Green Pepper", "Eggplant", "Lemon"}
 
     for name, ing in ingredients.items():
         daily = [consumption[d].get(name, D("0")) for d in days]
         avg = sum(daily, D("0")) / len(daily)
-        precision = D("1") if ing.unit in ("adet", "demet") else D("0.5")
+        precision = D("1") if ing.unit in ("piece", "bunch") else D("0.5")
         ing.reorder_level = max(precision, (avg * 2 / precision).quantize(D("1")) * precision)
         target = max(precision, (avg * 6 / precision).quantize(D("1")) * precision)
 
@@ -846,7 +933,7 @@ def seed_stock(
                 ingredient_id=ing.id,
                 change=q3(stock),
                 reason=StockReason.adjustment,
-                note="Açılış sayımı",
+                note="Opening count",
                 created_at=at(first_day, 8, 0),
             )
         )
@@ -862,7 +949,7 @@ def seed_stock(
                             ingredient_id=ing.id,
                             change=q3(qty),
                             reason=StockReason.purchase,
-                            note="Tedarikçi teslimatı",
+                            note="Supplier delivery",
                             created_at=at(d, 9, 0),
                         )
                     )
@@ -878,7 +965,7 @@ def seed_stock(
                             ingredient_id=ing.id,
                             change=qty,
                             reason=StockReason.purchase,
-                            note="Acil alım (tedarikçi gecikmesi)",
+                            note="Emergency purchase (supplier delay)",
                             created_at=at(d, 12, 0),
                         )
                     )
@@ -890,7 +977,7 @@ def seed_stock(
                         ingredient_id=ing.id,
                         change=q3(-used),
                         reason=StockReason.sale,
-                        note="Günlük satış tüketimi",
+                        note="Daily sales consumption",
                         created_at=ts,
                     )
                 )
@@ -903,7 +990,7 @@ def seed_stock(
                             ingredient_id=ing.id,
                             change=-waste,
                             reason=StockReason.waste,
-                            note="Haftalık fire",
+                            note="Weekly spoilage",
                             created_at=at(d, 23, 30),
                         )
                     )
@@ -928,7 +1015,7 @@ def seed(
             if verbose:
                 print("Database already seeded. Use --reset to reseed.")
             return
-        ctx = seed_reference_data(session)
+        ctx = seed_reference_data(session, now)
         ctx.days = days
         consumption = seed_orders(session, ctx, now)
         seed_stock(session, ctx, consumption, now)
@@ -936,12 +1023,13 @@ def seed(
 
         if verbose:
             n_orders = len(session.exec(select(Order.id)).all())
+            n_users = len(session.exec(select(User.id)).all())
             low = session.exec(
                 select(Ingredient).where(Ingredient.stock_qty < Ingredient.reorder_level)
             ).all()
             print(
-                f"Seeded {len(MENU)} menu items, {len(TABLES)} tables, {n_orders} orders "
-                f"over {days} days (until {now:%Y-%m-%d %H:%M})."
+                f"Seeded {len(MENU)} menu items, {len(TABLES)} tables, {n_users} users, "
+                f"{n_orders} orders over {days} days (until {now:%Y-%m-%d %H:%M})."
             )
             print("Below reorder level:", ", ".join(i.name for i in low) or "none")
 

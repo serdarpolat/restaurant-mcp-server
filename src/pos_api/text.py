@@ -1,82 +1,68 @@
-"""Forgiving, Turkish-aware search ("iskender" finds "İskender", "adana kebab" finds "Adana Kebap").
+"""Forgiving, bilingual search ("iskender" finds "Iskender Kebab", "corba" finds "Soup" items).
 
-The menu is in Turkish, but guests and AI agents often search in English. Each query word
-matches a name word if it is a prefix of it (or the reverse, for plurals: "kebabs"), if it is
-a close spelling ("kebab" ~ "kebap"), or if its English translation matches (GLOSSARY).
+The menu is in English, but guests and AI agents (this project's whole premise) often ask in
+Turkish. Each query word matches a name word if it is a prefix of it (or the reverse, for
+plurals: "kebabs"), if it is a close spelling ("kebab" ~ "kebap"), or if its Turkish form
+matches the English menu word via GLOSSARY.
 """
 
 _UPPER = str.maketrans({"İ": "i", "I": "ı"})
 _ASCII = str.maketrans({"ı": "i", "ş": "s", "ğ": "g", "ü": "u", "ö": "o", "ç": "c", "â": "a"})
 _PUNCT = str.maketrans({c: " " for c in ",.;:!?()[]\"'&/-+"})
 
-# English -> Turkish stems (normalized). Covers the dish words of this menu; a word not listed
-# here still matches by spelling, and the agent can translate anything else.
+# Turkish stems -> English words actually on this menu (normalized). Covers the dish/ingredient
+# words a Turkish-speaking guest would type; a word not listed here still matches by spelling,
+# and the agent can translate anything else. A few English alt-spellings are included too.
 GLOSSARY: dict[str, tuple[str, ...]] = {
-    "kebab": ("kebap", "kebab"),
-    "kebob": ("kebap", "kebab"),
-    "soup": ("corba",),
-    "lentil": ("mercimek",),
-    "yogurt": ("yogurt", "yayla", "haydari"),
-    "yoghurt": ("yogurt", "yayla", "haydari"),
-    "starter": ("baslangic",),
-    "appetizer": ("baslangic",),
-    "meze": ("baslangic", "haydari", "ezme"),
-    "chicken": ("tavuk",),
-    "wing": ("kanat",),
-    "lamb": ("kuzu",),
-    "beef": ("dana",),
-    "skewer": ("sis",),
-    "shish": ("sis",),
-    "chop": ("pirzola",),
-    "cutlet": ("pirzola",),
-    "meatball": ("kofte",),
-    "kofta": ("kofte",),
-    "kofte": ("kofte",),
-    "grill": ("izgara",),
-    "grilled": ("izgara",),
-    "mixed": ("karisik",),
-    "mix": ("karisik",),
-    "eggplant": ("patlican", "ali nazik"),
-    "aubergine": ("patlican", "ali nazik"),
-    "cheese": ("kasar",),
-    "egg": ("yumurta",),
-    "pizza": ("lahmacun", "pide"),
-    "flatbread": ("lahmacun", "pide"),
-    "salad": ("salata",),
-    "shepherd": ("coban",),
-    "dessert": ("tatli",),
-    "sweet": ("tatli",),
-    "pistachio": ("fistik",),
-    "baklava": ("baklava",),
-    "pudding": ("sutlac",),
-    "drink": ("icecek",),
-    "beverage": ("icecek",),
-    "tea": ("cay",),
-    "coffee": ("kahve",),
-    "water": ("su",),
-    "coke": ("kola",),
-    "cola": ("kola",),
-    "lemonade": ("limonata",),
-    "soda": ("soda",),
-    "turnip": ("salgam",),
-    "buttermilk": ("ayran",),
-    "spicy": ("acili",),
-    # ingredients (stock questions in English)
-    "mince": ("kiyma",),
-    "minced": ("kiyma",),
-    "ground": ("kiyma",),
-    "thigh": ("but",),
-    "dough": ("hamur",),
-    "rice": ("pirinc",),
-    "tomato": ("domates",),
-    "tomatoe": ("domates",),
-    "onion": ("sogan",),
-    "pepper": ("biber",),
-    "chili": ("biber",),
-    "parsley": ("maydanoz",),
-    "lemon": ("limon",),
-    "butter": ("tereyag",),
-    "bulgur": ("bulgur",),
+    "corba": ("soup",),
+    "mercimek": ("lentil",),
+    "baslangic": ("starter", "appetizer"),
+    "tavuk": ("chicken",),
+    "kanat": ("wing",),
+    "kuzu": ("lamb",),
+    "dana": ("ground", "beef"),
+    "sis": ("shish", "skewer"),
+    "pirzola": ("chop", "cutlet"),
+    "kofte": ("meatball",),
+    "kofta": ("meatball",),
+    "izgara": ("grill", "grilled"),
+    "karisik": ("mixed", "mix"),
+    "patlican": ("eggplant",),
+    "kasar": ("cheese",),
+    "yumurta": ("egg",),
+    "lahmacun": ("flatbread", "pizza"),
+    "pide": ("flatbread", "pizza"),
+    "salata": ("salad",),
+    "coban": ("shepherd",),
+    "tatli": ("dessert", "sweet"),
+    "fistik": ("pistachio",),
+    "sutlac": ("pudding",),
+    "icecek": ("drink", "beverage"),
+    "cay": ("tea",),
+    "kahve": ("coffee",),
+    "su": ("water",),
+    "kola": ("cola", "coke"),
+    "limonata": ("lemonade",),
+    "salgam": ("turnip",),
+    "ayran": ("buttermilk",),
+    "acili": ("spicy",),
+    # ingredients (stock questions in Turkish)
+    "kiyma": ("mince", "minced", "ground"),
+    "but": ("thigh",),
+    "hamur": ("dough",),
+    "pirinc": ("rice",),
+    "domates": ("tomato",),
+    "sogan": ("onion",),
+    "biber": ("pepper", "chili"),
+    "maydanoz": ("parsley",),
+    "limon": ("lemon",),
+    "tereyag": ("butter",),
+    # common English alt-spellings worth normalizing explicitly
+    "kebob": ("kebab",),
+    "yoghurt": ("yogurt",),
+    "aubergine": ("eggplant",),
+    "cutlet": ("chop",),
+    "drink": ("beverage",),
 }
 
 # Words that carry no dish name: English/Turkish fillers and order words.

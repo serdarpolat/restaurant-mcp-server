@@ -47,7 +47,7 @@ from pos_mcp.said import (
 RESTAURANT_TZ = ZoneInfo(os.getenv("RESTAURANT_TZ", "Europe/Istanbul"))
 
 INSTRUCTIONS = """\
-POS of a kebab restaurant. Menu, option and table names are data in Turkish; staff may
+POS of a kebab restaurant. Menu, option and table names are data in English; staff may
 write in any language.
 
 - Answer in the language of the user's LATEST message:
@@ -62,12 +62,12 @@ write in any language.
   'today'; "last 7 days" -> date_from='-7', date_to='today'. Never compute a year yourself.
   Money is TRY, times are local.
 - Never guess or reuse ids: look them up in this turn. Tables are passed by name
-  (table_name, e.g. 'Bahçe 2'), order lines by item name with options by name
+  (table_name, e.g. 'Garden 2'), order lines by item name with options by name
   ({"name": "Lahmacun", "quantity": 3, "options": ["not spicy"]}). A table's order:
   get_order(table_name=...).
 - Ordering for a table: create_order or add_items_to_order with the table the user named.
   The server adds to that table's open order or opens one. Never use another table.
-  Takeaway and delivery have no table.
+  Pickup and delivery have no table.
 - Send the user's own quantities and every option they said. Never choose a REQUIRED option
   (e.g. the spice level) and never ask about optional ones. Different options for units =
   separate lines (one spicy + one not spicy = two lines).
@@ -119,11 +119,11 @@ IngredientId = Annotated[
 ]
 IngredientName = Annotated[
     str,
-    Field(description="The ingredient's name, e.g. 'Dana Kıyma'. Checked against ingredient_id."),
+    Field(description="The ingredient's name, e.g. 'Ground Beef'. Checked against ingredient_id."),
 ]
 Category = Annotated[
     str | None,
-    Field(description="Turkish category name, e.g. 'Çorbalar'. Unknown names return the list."),
+    Field(description="Category name, e.g. 'Soups'. Unknown names return the list."),
 ]
 ReturnToStock = Annotated[
     bool,
@@ -160,14 +160,14 @@ class OrderLine(BaseModel):
         default=1,
         ge=1,
         le=50,
-        description="How many of this item WITH THESE OPTIONS: '3 acısız lahmacun' = 3; "
-        "'2 Adana, biri acılı biri acısız' = two lines with quantity 1. The count goes here, "
+        description="How many of this item WITH THESE OPTIONS: '3 not spicy lahmacun' = 3; "
+        "'2 Adana, one spicy one not spicy' = two lines with quantity 1. The count goes here, "
         "never in the note. Checked against user_message.",
     )
     options: list[str] = Field(
         default_factory=list,
-        description="Option names from get_menu_item, e.g. ['Acısız'] or ['Büyük Boy']. English "
-        "works too: 'spicy', 'mild', 'not spicy', 'large'. Applies to every unit of this line: "
+        description="Option names from get_menu_item, e.g. ['Not Spicy'] or ['Large']. Turkish "
+        "works too: 'acılı', 'az acılı', 'acısız', 'büyük'. Applies to every unit of this line: "
         "'1 acılı + 1 acısız Adana' = two lines with quantity 1 each.",
     )
     modifier_ids: list[int] = Field(
@@ -569,7 +569,7 @@ async def list_tables(
 @mcp.tool(annotations=READ)
 async def list_orders(
     status: Literal["open", "paid", "cancelled"] | None = None,
-    channel: Literal["dine_in", "takeaway", "delivery"] | None = None,
+    channel: Literal["dineIn", "pickup", "delivery"] | None = None,
     table_id: int | None = None,
     date_from: Date = None,
     date_to: Date = None,
@@ -767,11 +767,11 @@ async def _check_order_table_said(user_message: str, order: dict[str, Any]) -> N
 TableName = Annotated[
     str | None,
     Field(
-        description="The table's name as the user said it, e.g. 'Bahçe 2'. Omit for takeaway "
+        description="The table's name as the user said it, e.g. 'Garden 2'. Omit for pickup "
         "and delivery."
     ),
 ]
-_NO_TABLE = {"takeaway", "delivery", "paket", "paket servis", "gel al", "kurye"}
+_NO_TABLE = {"pickup", "takeaway", "delivery", "paket", "paket servis", "gel al", "kurye"}
 # What models write when the user named no table.
 _UNKNOWN_TABLE = {"?", "unknown", "none", "null", "n/a", "bilinmiyor", "yok", "table", "masa"}
 
@@ -798,7 +798,7 @@ async def _to_table(table: dict[str, Any], lines: list[dict[str, Any]]) -> dict[
         )
         return _result(summary, order)
     order = await api.post(
-        "/orders", {"channel": "dine_in", "table_id": table["id"], "items": lines}
+        "/orders", {"channel": "dineIn", "table_id": table["id"], "items": lines}
     )
     summary = i18n.t("opened_table", table=table["name"], order_id=order["id"], lines=_added(order))
     return _result(summary, order)
@@ -809,34 +809,34 @@ async def create_order(
     items: Items,
     user_message: UserMessage,
     channel: Annotated[
-        Literal["dine_in", "takeaway", "delivery"],
-        Field(description="'paket' / 'paket servis' = takeaway (no table); 'kurye' = delivery."),
-    ] = "dine_in",
+        Literal["dineIn", "pickup", "delivery"],
+        Field(description="'paket' / 'paket servis' = pickup (no table); 'kurye' = delivery."),
+    ] = "dineIn",
     table_name: TableName = None,
     table_id: Annotated[
         int | None, Field(description="Optional; checked against table_name.")
     ] = None,
     reply_language: ReplyLanguage = None,
 ) -> dict[str, Any]:
-    """Order for a table (dine-in) or a takeaway/delivery order.
+    """Order for a table (dine-in) or a pickup/delivery order.
 
     Dine-in: pass the table the user named as table_name. If it already has an open order,
     the items are ADDED to it; otherwise a new order is opened.
     Send exactly what the user said: their quantities and every option they named. Units of
     the same item with different options go on separate lines.
-    If the user named no table (and did not say takeaway or delivery), or did not give a
+    If the user named no table (and did not say pickup or delivery), or did not give a
     REQUIRED option such as the spice level, do not choose for them: call anyway with what
     they said. Nothing is saved; the error gives the question to ask (ASK_USER), already in
     the user's language. Ask it and wait for their answer.
     """
     i18n.use(user_message, reply_language)
-    if channel == "dine_in" and not table_name and table_id is None:
+    if channel == "dineIn" and not table_name and table_id is None:
         # The model left channel at its default and named no table either: maybe because
-        # it forgot takeaway/delivery has none, not because the user wants dine-in.
+        # it forgot pickup/delivery has none, not because the user wants dine-in.
         detected = channel_from_message(user_message)
         if detected:
             channel = detected
-    if channel == "dine_in":
+    if channel == "dineIn":
         if table_name and table_id is not None:
             await _checked_table(table_id, table_name)
         if table_name:
@@ -845,7 +845,7 @@ async def create_order(
             tables = await api.get("/tables")
             table = next((t for t in tables if t["id"] == table_id), None)
             if table is None:
-                raise _refuse(f"No table_id {table_id}. Pass table_name, e.g. 'Salon 3'.")
+                raise _refuse(f"No table_id {table_id}. Pass table_name, e.g. 'Hall 3'.")
             _check_table_said(user_message, tables, table)
         else:  # the server asks which table (and anything else missing), in their language
             await _lines(items, user_message, table_missing=True)
@@ -873,13 +873,13 @@ async def add_items_to_order(
     table_name: Annotated[
         str,
         Field(
-            description="The table the user named, e.g. 'Salon 4', or 'takeaway' / 'delivery' "
+            description="The table the user named, e.g. 'Hall 4', or 'pickup' / 'delivery' "
             "for an order without a table (then order_id is required)."
         ),
     ],
     order_id: Annotated[
         int | None,
-        Field(description="Only for takeaway/delivery orders. Tables are found by table_name."),
+        Field(description="Only for pickup/delivery orders. Tables are found by table_name."),
     ] = None,
     reply_language: ReplyLanguage = None,
 ) -> dict[str, Any]:
@@ -899,7 +899,7 @@ async def add_items_to_order(
             await _table_by_name(table_name, user_message), await _lines(items, user_message)
         )
     if order_id is None:
-        raise _refuse("For takeaway/delivery pass order_id (list_orders(status='open')).")
+        raise _refuse("For pickup/delivery pass order_id (list_orders(status='open')).")
     order = await api.get(f"/orders/{order_id}")
     if order["status"] != "open" or order["table"] is not None:
         raise _refuse(
@@ -946,7 +946,7 @@ async def set_table_status(
 
 
 def _added(order: dict[str, Any]) -> str:
-    """'1 x Lahmacun (Acısız), 2 x Çay. Order total 1,920.00 TRY.' for the result summary."""
+    """'1 x Lahmacun (Not Spicy), 2 x Tea. Order total 1,920.00 TRY.' for the result summary."""
     lines = ", ".join(_describe(i) for i in order["items"])
     return f"{lines}. " + i18n.t("order_total", total=_money(order["total"]))
 
@@ -1151,8 +1151,11 @@ async def approve_payment(
 async def pay_order(
     order_id: OrderId,
     method: Annotated[
-        Literal["cash", "card", "online"],
-        Field(description="As the user said it ('kart', 'by card' = card). If not said, ask."),
+        Literal["cash", "credit_card", "meal_voucher", "apple_pay", "google_pay"],
+        Field(
+            description="As the user said it ('kart', 'by card' = credit_card, 'yemek çeki' = "
+            "meal_voucher). If not said, ask."
+        ),
     ],
     user_message: UserMessage,
     approval: Annotated[ElicitationResult[Approval], Resolve(approve_payment)],
@@ -1225,7 +1228,7 @@ async def record_stock_purchase(
     quantity: Annotated[float, Field(gt=0, description="In the ingredient's own unit.")],
     user_message: UserMessage,
     approval: Annotated[ElicitationResult[Approval], Resolve(approve_purchase)],
-    note: str = "Manuel alım",
+    note: str = "Manual purchase",
     confirmation_token: ConfirmToken = None,
     user_reply: UserReply = None,
     reply_language: ReplyLanguage = None,

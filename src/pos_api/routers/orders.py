@@ -11,6 +11,7 @@ from pos_api.db.models import (
     OrderChannel,
     OrderStatus,
     Staff,
+    User,
 )
 from pos_api.deps import ActorDep, SessionDep
 from pos_api.schemas import (
@@ -32,12 +33,14 @@ router = APIRouter(prefix="/orders", tags=["orders"])
 def _summary(session, o: Order) -> dict:
     table = session.get(DiningTable, o.table_id) if o.table_id else None
     staff = session.get(Staff, o.staff_id) if o.staff_id else None
+    user = session.get(User, o.user_id) if o.user_id else None
     return {
         "id": o.id,
         "channel": o.channel,
         "status": o.status,
         "table": table.name if table else None,
         "staff": staff.name if staff else None,
+        "customer": user.name if user else None,
         "opened_at": to_local(o.opened_at),
         "closed_at": to_local(o.closed_at) if o.closed_at else None,
         "subtotal": o.subtotal,

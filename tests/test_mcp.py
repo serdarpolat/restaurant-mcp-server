@@ -60,10 +60,10 @@ def data(result):
 async def open_adana_order(client) -> dict:
     adana = data(await client.call_tool("search_menu", {"query": "adana"}))[0]
     detail = data(await client.call_tool("get_menu_item", {"menu_item_id": adana["id"]}))
-    spice = next(g for g in detail["modifier_groups"] if g["name"] == "Acı Seviyesi")
+    spice = next(g for g in detail["modifier_groups"] if g["name"] == "Spice Level")
     table = data(await client.call_tool("list_tables", {"status": "free"}))[0]
     line = {
-        "name": "Adana Kebap",
+        "name": "Adana Kebab",
         "menu_item_id": adana["id"],
         "quantity": 2,
         "modifier_ids": [spice["modifiers"][0]["id"]],
@@ -85,7 +85,7 @@ async def test_tools_are_listed_with_safety_annotations(pos_api):
 async def test_search_and_reports(pos_api):
     async with Client(mcp) as client:
         items = data(await client.call_tool("search_menu", {"query": "iskender"}))
-        assert [i["name"] for i in items] == ["İskender"]
+        assert [i["name"] for i in items] == ["Iskender Kebab"]
         low = data(await client.call_tool("get_inventory", {"low_stock_only": True}))
         assert low and all(i["below_reorder"] for i in low)
         summary = data(await client.call_tool("get_daily_summary", {}))
@@ -95,9 +95,9 @@ async def test_search_and_reports(pos_api):
 async def test_search_menu_falls_back_to_closest_items_with_a_note(pos_api):
     async with Client(mcp) as client:
         exact = data(await client.call_tool("search_menu", {"query": "adana kebab"}))
-        assert exact[0]["name"] == "Adana Kebap"
+        assert exact[0]["name"] == "Adana Kebab"
         close = data(await client.call_tool("search_menu", {"query": "adana dürüm"}))
-        assert close["items"][0]["name"] == "Adana Kebap"
+        assert close["items"][0]["name"] == "Adana Kebab"
         assert "ask the user" in close["note"]
         none = data(await client.call_tool("search_menu", {"query": "sushi"}))
         assert none["items"] == [] and "one key word" in none["note"]
@@ -108,13 +108,13 @@ async def test_api_errors_reach_the_model_with_recovery_hints(pos_api):
         adana = data(await client.call_tool("search_menu", {"query": "adana"}))[0]
         result = await client.call_tool(
             "create_order",
-            {"channel": "takeaway", "items": [{"name": "Adana", "menu_item_id": adana["id"]}]},
+            {"channel": "pickup", "items": [{"name": "Adana", "menu_item_id": adana["id"]}]},
         )
     assert result.is_error
     message = result.content[0].text
     # a missing required choice is a question for the user, written by the server
-    assert "NOT SAVED" in message and "ASK_USER: Spice level for the Adana Kebap" in message
-    assert "Acısız (not spicy)" in message
+    assert "NOT SAVED" in message and "ASK_USER: Spice Level for the Adana Kebab" in message
+    assert "Not Spicy" in message
 
 
 async def test_cancel_needs_token_and_token_is_bound_to_arguments(pos_api):
@@ -165,7 +165,7 @@ async def test_elicitation_asks_the_user_directly(pos_api, approve, expected):
     async with Client(mcp, elicitation_callback=user) as client:
         order = await open_adana_order(client)
         result = data(
-            await client.call_tool("pay_order", {"order_id": order["id"], "method": "card"})
+            await client.call_tool("pay_order", {"order_id": order["id"], "method": "credit_card"})
         )
         after = data(await client.call_tool("get_order", {"order_id": order["id"]}))
 
@@ -185,7 +185,7 @@ async def test_menu_resource_and_prompts(pos_api):
     async with Client(mcp) as client:
         menu = await client.read_resource("restaurant://menu")
         prompts = {p.name for p in (await client.list_prompts()).prompts}
-    assert "Adana Kebap" in menu.contents[0].text
+    assert "Adana Kebab" in menu.contents[0].text
     assert prompts == {"daily_briefing", "stock_investigation"}
 
 
@@ -265,31 +265,31 @@ async def test_impossible_dates_are_refused_with_a_hint(pos_api):
 async def test_ids_are_checked_against_the_name_the_user_said(pos_api):
     async with Client(mcp) as client:
         tables = data(await client.call_tool("list_tables", {}))
-        teras = next(t for t in tables if t["name"] == "Teras 1")
-        other = next(t for t in tables if t["name"] != "Teras 1")
+        teras = next(t for t in tables if t["name"] == "Terrace 1")
+        other = next(t for t in tables if t["name"] != "Terrace 1")
         wrong = await client.call_tool(
             "set_table_status",
-            {"table_id": other["table_id"], "table_name": "Teras 1", "status": "reserved"},
+            {"table_id": other["table_id"], "table_name": "Terrace 1", "status": "reserved"},
         )
         right = await client.call_tool(
             "set_table_status",
-            {"table_id": teras["table_id"], "table_name": "teras 1", "status": "reserved"},
+            {"table_id": teras["table_id"], "table_name": "terrace 1", "status": "reserved"},
         )
-        kiyma = data(await client.call_tool("get_inventory", {"search": "kıyma"}))[0]
+        kiyma = data(await client.call_tool("get_inventory", {"search": "ground beef"}))[0]
         guessed = await client.call_tool(
             "get_stock_movements",
-            {"ingredient_id": kiyma["ingredient_id"] + 1, "ingredient_name": "Dana Kıyma"},
+            {"ingredient_id": kiyma["ingredient_id"] + 1, "ingredient_name": "Ground Beef"},
         )
         purchase = await client.call_tool(
             "record_stock_purchase",
             {
                 "ingredient_id": kiyma["ingredient_id"] + 1,
-                "ingredient_name": "Dana Kıyma",
+                "ingredient_name": "Ground Beef",
                 "quantity": 10,
             },
         )
     assert wrong.is_error
-    assert f"'Teras 1' is table_id {teras['table_id']}" in wrong.content[0].text
+    assert f"'Terrace 1' is table_id {teras['table_id']}" in wrong.content[0].text
     assert data(right)["status"] == "reserved"
     assert "id" not in kiyma
     for result in (guessed, purchase):  # nothing previewed or changed for the wrong item
@@ -349,24 +349,24 @@ async def test_order_lines_by_name_and_option_names(pos_api):
             await client.call_tool(
                 "create_order",
                 {
-                    "table_name": "Salon 4",
+                    "table_name": "Hall 4",
                     "items": [
                         {"name": "adana kebab", "options": ["spicy"]},
-                        {"name": "Adana Kebap", "options": ["not spicy", "Acısız"]},
+                        {"name": "Adana Kebab", "options": ["not spicy", "Acısız"]},
                         {"name": "lahmajun", "quantity": 3, "options": ["Acısız"]},
                         {"name": "Ayran", "options": ["large"]},
                     ],
                 },
             )
         )
-    assert order["table"] == "Salon 4"
-    assert order["summary"].startswith(f"OPENED order #{order['id']} on Salon 4: ")
+    assert order["table"] == "Hall 4"
+    assert order["summary"].startswith(f"OPENED order #{order['id']} on Hall 4: ")
     got = sorted((i["name"], i["quantity"], i["modifiers"]) for i in order["items"])
     assert got == [
-        ("Adana Kebap", 1, "Acılı"),
-        ("Adana Kebap", 1, "Acısız"),
-        ("Ayran", 1, "Büyük Boy"),
-        ("Lahmacun", 3, "Acısız"),
+        ("Adana Kebab", 1, "Not Spicy"),
+        ("Adana Kebab", 1, "Spicy"),
+        ("Ayran", 1, "Large"),
+        ("Lahmacun", 3, "Not Spicy"),
     ]
 
 
@@ -375,30 +375,30 @@ async def test_a_remembered_id_that_does_not_match_the_name_is_refused(pos_api):
         adana = data(await client.call_tool("search_menu", {"query": "adana"}))[0]
         line = {"name": "Lahmacun", "menu_item_id": adana["id"], "options": ["Acısız"]}
         result, text = await call(
-            client, "create_order", {"table_name": "Bahçe 2", "items": [line]}
+            client, "create_order", {"table_name": "Garden 2", "items": [line]}
         )
         assert result.is_error and text.count("NOT SAVED") == 1
-        assert "is 'Adana Kebap', not 'Lahmacun'" in text and "'Lahmacun' (menu_item_id" in text
+        assert "is 'Adana Kebab', not 'Lahmacun'" in text and "'Lahmacun' (menu_item_id" in text
         result, text = await call(
-            client, "create_order", {"channel": "takeaway", "items": [{"name": "kebap"}]}
+            client, "create_order", {"channel": "pickup", "items": [{"name": "kebap"}]}
         )
         assert result.is_error and "Ask the user which one" in text
         result, text = await call(
             client,
             "create_order",
-            {"channel": "takeaway", "items": [{"name": "Kola", "size": "L"}]},
+            {"channel": "pickup", "items": [{"name": "Cola", "size": "L"}]},
         )
         assert result.is_error  # unknown fields are refused, not silently dropped
         result, text = await call(
             client,
             "create_order",
-            {"channel": "takeaway", "items": [{"name": "Ayran", "options": ["iced"]}]},
+            {"channel": "pickup", "items": [{"name": "Ayran", "options": ["iced"]}]},
         )
-        assert result.is_error and "Büyük Boy" in text
+        assert result.is_error and "Large" in text
 
 
 async def test_orders_go_to_the_named_table_whatever_order_id_was_remembered(pos_api):
-    """Seen in LM Studio: "Bahçe 3'e ... ekle" went to the previous table's order id."""
+    """Seen in LM Studio: "Garden 3'e ... ekle" went to the previous table's order id."""
     async with Client(mcp) as client:
         order = await open_adana_order(client)  # on the first free table
         table = order["table"]
@@ -409,34 +409,34 @@ async def test_orders_go_to_the_named_table_whatever_order_id_was_remembered(pos
                 {
                     "order_id": order["id"] + 1000,
                     "table_name": table,
-                    "items": [{"name": "Çay", "quantity": 2}],
+                    "items": [{"name": "Tea", "quantity": 2}],
                 },
             )
         )
         assert ok["id"] == order["id"]
         assert ok["summary"].startswith(f"ADDED to {table}'s open order #{order['id']}")
-        assert "2 x Çay" in ok["summary"] and "Adana" not in ok["summary"]
+        assert "2 x Tea" in ok["summary"] and "Adana" not in ok["summary"]
         # "add" to a table without an order opens one there
         teras = data(
             await client.call_tool(
-                "add_items_to_order", {"table_name": "Teras 2", "items": [{"name": "Su"}]}
+                "add_items_to_order", {"table_name": "Terrace 2", "items": [{"name": "Water"}]}
             )
         )
-        assert teras["table"] == "Teras 2" and teras["summary"].startswith("OPENED order #")
+        assert teras["table"] == "Terrace 2" and teras["summary"].startswith("OPENED order #")
         # "open" on a table that already has an order adds to it (no second order, no error)
         again = data(
             await client.call_tool(
-                "create_order", {"table_name": "Teras 2", "items": [{"name": "Kola"}]}
+                "create_order", {"table_name": "Terrace 2", "items": [{"name": "Cola"}]}
             )
         )
-        assert again["id"] == teras["id"] and again["summary"].startswith("ADDED to Teras 2")
-        # get_order by table name: no order id needed for "what is Teras 2's bill"
-        bill = data(await client.call_tool("get_order", {"table_name": "teras 2"}))
+        assert again["id"] == teras["id"] and again["summary"].startswith("ADDED to Terrace 2")
+        # get_order by table name: no order id needed for "what is Terrace 2's bill"
+        bill = data(await client.call_tool("get_order", {"table_name": "terrace 2"}))
         assert bill["id"] == teras["id"] and len(bill["items"]) == 2
         result, text = await call(
             client,
             "create_order",
-            {"channel": "takeaway", "table_name": "Teras 2", "items": [{"name": "Su"}]},
+            {"channel": "pickup", "table_name": "Terrace 2", "items": [{"name": "Water"}]},
         )
         assert result.is_error and "no table" in text
 
@@ -451,64 +451,64 @@ async def test_a_table_the_user_did_not_say_is_refused(pos_api):
             client,
             "create_order",
             {
-                "table_name": "Salon 4",  # the model's argument...
+                "table_name": "Hall 4",  # the model's argument...
                 "items": [{"name": "Ayran", "quantity": 1}],
-                "user_message": "Teras 2'ye 1 ayran aç.",  # ...does not match the user's words
+                "user_message": "Terrace 2'ye 1 ayran aç.",  # ...does not match the user's words
             },
         )
         assert wrong.is_error
-        assert "user said 'Teras 2', not 'Salon 4'" in text
-        assert "table_name='Teras 2'" in text
+        assert "user said 'Terrace 2', not 'Hall 4'" in text
+        assert "table_name='Terrace 2'" in text
         # the same table_id taken from an earlier turn, now stale
-        salon4 = next(
-            t for t in data(await client.call_tool("list_tables", {})) if t["name"] == "Salon 4"
+        hall4 = next(
+            t for t in data(await client.call_tool("list_tables", {})) if t["name"] == "Hall 4"
         )
         stale_id, text = await call(
             client,
             "create_order",
             {
-                "table_id": salon4["table_id"],
+                "table_id": hall4["table_id"],
                 "items": [{"name": "Ayran", "quantity": 1}],
-                "user_message": "Teras 2'ye 1 ayran aç.",
+                "user_message": "Terrace 2'ye 1 ayran aç.",
             },
         )
-        assert stale_id.is_error and "user said 'Teras 2', not 'Salon 4'" in text
+        assert stale_id.is_error and "user said 'Terrace 2', not 'Hall 4'" in text
         # add_items_to_order is checked the same way
         wrong_add, text = await call(
             client,
             "add_items_to_order",
             {
-                "table_name": "Salon 4",
+                "table_name": "Hall 4",
                 "items": [{"name": "Ayran", "quantity": 1}],
-                "user_message": "Teras 2'ye 1 ayran ekle.",
+                "user_message": "Terrace 2'ye 1 ayran ekle.",
             },
         )
-        assert wrong_add.is_error and "user said 'Teras 2', not 'Salon 4'" in text
+        assert wrong_add.is_error and "user said 'Terrace 2', not 'Hall 4'" in text
         # the matching table still works
         ok = data(
             await client.call_tool(
                 "create_order",
                 {
-                    "table_name": "Teras 2",
+                    "table_name": "Terrace 2",
                     "items": [{"name": "Ayran", "quantity": 1}],
-                    "user_message": "Teras 2'ye 1 ayran aç.",
+                    "user_message": "Terrace 2'ye 1 ayran aç.",
                 },
             )
         )
-        assert ok["table"] == "Teras 2"
+        assert ok["table"] == "Terrace 2"
         # a message naming no table at all (an answer, a generic "add it") is never held
         # against the caller's table_name - same conservative rule as quantities()
         ok2 = data(
             await client.call_tool(
                 "add_items_to_order",
                 {
-                    "table_name": "Teras 2",
-                    "items": [{"name": "Çay", "quantity": 1}],
+                    "table_name": "Terrace 2",
+                    "items": [{"name": "Tea", "quantity": 1}],
                     "user_message": "evet, ekleyin",
                 },
             )
         )
-        assert ok2["table"] == "Teras 2"
+        assert ok2["table"] == "Terrace 2"
 
 
 async def test_cancel_void_pay_are_checked_against_the_table_the_user_said(pos_api):
@@ -516,16 +516,16 @@ async def test_cancel_void_pay_are_checked_against_the_table_the_user_said(pos_a
     user's words (test_a_table_the_user_did_not_say_is_refused above), but cancel_order,
     void_order_item and pay_order take order_id, not table_name, so that guard never ran
     for them. A stale or hallucinated order_id from earlier in the chat could act on the
-    wrong table's order: "cancel the order on Bahçe 2" ran against an order_id that was
-    actually Salon 3's, with no table ever opened on Bahçe 2 at all."""
+    wrong table's order: "cancel the order on Garden 2" ran against an order_id that was
+    actually Hall 3's, with no table ever opened on Garden 2 at all."""
     async with Client(mcp) as client:
         order = data(
             await client.call_tool(
                 "create_order",
                 {
-                    "table_name": "Salon 4",
+                    "table_name": "Hall 4",
                     "items": [{"name": "Ayran", "quantity": 1}],
-                    "user_message": "Salon 4'e 1 ayran aç.",
+                    "user_message": "Hall 4'e 1 ayran aç.",
                 },
             )
         )
@@ -538,16 +538,16 @@ async def test_cancel_void_pay_are_checked_against_the_table_the_user_said(pos_a
             {
                 **args,
                 "order_item_id": line_id,
-                "user_message": "Remove the ayran from the order on Teras 2.",
+                "user_message": "Remove the ayran from the order on Terrace 2.",
             },
         )
         assert wrong_void.is_error
-        assert "user said 'Teras 2'" in text and f"order #{order['id']}" in text
+        assert "user said 'Terrace 2'" in text and f"order #{order['id']}" in text
 
         wrong_cancel, text = await call(
-            client, "cancel_order", {**args, "user_message": "Cancel the order on Teras 2."}
+            client, "cancel_order", {**args, "user_message": "Cancel the order on Terrace 2."}
         )
-        assert wrong_cancel.is_error and "user said 'Teras 2'" in text
+        assert wrong_cancel.is_error and "user said 'Terrace 2'" in text
 
         wrong_pay, text = await call(
             client,
@@ -555,15 +555,15 @@ async def test_cancel_void_pay_are_checked_against_the_table_the_user_said(pos_a
             {
                 "order_id": order["id"],
                 "method": "cash",
-                "user_message": "Take cash for the Teras 2 bill.",
+                "user_message": "Take cash for the Terrace 2 bill.",
             },
         )
-        assert wrong_pay.is_error and "user said 'Teras 2'" in text
+        assert wrong_pay.is_error and "user said 'Terrace 2'" in text
 
         # the matching table still works, and still asks for approval as usual
         ok = data(
             await client.call_tool(
-                "cancel_order", {**args, "user_message": "Cancel the order on Salon 4."}
+                "cancel_order", {**args, "user_message": "Cancel the order on Hall 4."}
             )
         )
         assert ok["status"] == "confirmation_required"
@@ -575,18 +575,18 @@ async def test_cancel_void_pay_are_checked_against_the_table_the_user_said(pos_a
 async def test_table_names_match_whole_words(pos_api):
     async with Client(mcp) as client:
         tables = data(await client.call_tool("list_tables", {}))
-        salon1 = next(t for t in tables if t["name"] == "Salon 1")
+        hall1 = next(t for t in tables if t["name"] == "Hall 1")
         result, text = await call(
             client,
             "set_table_status",
-            {"table_id": salon1["table_id"], "table_name": "Salon 10", "status": "reserved"},
+            {"table_id": hall1["table_id"], "table_name": "Hall 10", "status": "reserved"},
         )
-        assert result.is_error and "no table is named 'Salon 10'" in text
-        for said in ("salon1", "Salon 1 masası"):
+        assert result.is_error and "no table is named 'Hall 10'" in text
+        for said in ("hall1", "Hall 1 masası"):
             data(
                 await client.call_tool(
                     "set_table_status",
-                    {"table_id": salon1["table_id"], "table_name": said, "status": "free"},
+                    {"table_id": hall1["table_id"], "table_name": said, "status": "free"},
                 )
             )
 
@@ -605,14 +605,14 @@ async def test_impossible_actions_fail_before_the_approval_step(pos_api):
             "void_order_item",
             {"order_id": order["id"], "order_item_id": 999999, "reason": "x"},
         )
-        assert result.is_error and "Active lines:" in text and "Adana Kebap (Acılı = spicy)" in text
+        assert result.is_error and "Active lines:" in text and "Adana Kebab (Spicy)" in text
         line = order["items"][0]["id"]
         preview = data(
             await client.call_tool(
                 "void_order_item", {"order_id": order["id"], "order_item_id": line, "reason": "x"}
             )
         )["preview"]
-        assert "Adana Kebap (Acılı = spicy)" in preview
+        assert "Adana Kebab (Spicy)" in preview
         result, text = await call(
             client, "pay_order", {"order_id": order["id"], "method": "cash", "discount_percent": 10}
         )
@@ -633,7 +633,7 @@ async def test_english_category_in_reports(pos_api):
         yesterday = (date.fromisoformat(today) - timedelta(days=1)).isoformat()
         args = {"category": "drinks", "date_from": yesterday}
         top = data(await client.call_tool("get_top_items", args))
-        assert top["items"] and {i["category"] for i in top["items"]} == {"İçecekler"}
+        assert top["items"] and {i["category"] for i in top["items"]} == {"Beverages"}
 
 
 async def test_a_token_does_not_run_the_action_when_the_user_said_no(pos_api):
@@ -725,18 +725,18 @@ def test_a_yes_followed_by_a_refusal_is_not_approved(reply):
 
 
 async def test_write_results_are_in_the_users_language(pos_api):
-    line = {"name": "Adana Kebap", "quantity": 1, "options": ["spicy"]}
+    line = {"name": "Adana Kebab", "quantity": 1, "options": ["spicy"]}
     async with Client(mcp) as client:
         tr = data(
             await client.call_tool(
                 "create_order",
-                {"table_name": "Salon 1", "items": [line], "user_message": "Salon 1'e acılı Adana"},
+                {"table_name": "Hall 1", "items": [line], "user_message": "Hall 1'e acılı Adana"},
             )
         )
         en = data(
             await client.call_tool(
                 "create_order",
-                {"table_name": "Salon 1", "items": [line], "user_message": "Add a spicy Adana"},
+                {"table_name": "Hall 1", "items": [line], "user_message": "Add a spicy Adana"},
             )
         )
         de = data(
@@ -744,19 +744,19 @@ async def test_write_results_are_in_the_users_language(pos_api):
                 "create_order",
                 # German is not detected: the model's reply_language decides
                 {
-                    "channel": "takeaway",
+                    "channel": "pickup",
                     "items": [line],
                     "user_message": "Einmal Adana zum Mitnehmen",
                     "reply_language": "de",
                 },
             )
         )
-    assert tr["summary"].startswith("AÇILDI: Salon 1 için")
-    assert "1 x Adana Kebap (Acılı)" in tr["summary"] and "Sipariş toplamı" in tr["summary"]
-    assert en["summary"].startswith("ADDED to Salon 1's open order")
-    assert "1 x Adana Kebap (Acılı = spicy)" in en["summary"] and "Order total" in en["summary"]
+    assert tr["summary"].startswith("AÇILDI: Hall 1 için")
+    assert "1 x Adana Kebab (Spicy = acılı)" in tr["summary"] and "Sipariş toplamı" in tr["summary"]
+    assert en["summary"].startswith("ADDED to Hall 1's open order")
+    assert "1 x Adana Kebab (Spicy)" in en["summary"] and "Order total" in en["summary"]
     # other languages: English text, and an explicit language to answer in
-    assert de["summary"].startswith("OPENED takeaway order")
+    assert de["summary"].startswith("OPENED pickup order")
     assert (tr["answer_the_user_in"], en["answer_the_user_in"]) == ("Turkish", "English")
     assert de["answer_the_user_in"] == "German"
     assert list(en)[-1] == "answer_the_user_in"  # read last, after the Turkish data
@@ -769,7 +769,7 @@ async def test_user_message_is_required_on_write_tools(pos_api):
             assert "user_message" in tools[name].input_schema["required"], name
             assert "reply_language" not in tools[name].input_schema["required"], name
         result = await client.call_tool(
-            "create_order", {"table_name": "Salon 1", "items": [{"name": "Ayran"}]}
+            "create_order", {"table_name": "Hall 1", "items": [{"name": "Ayran"}]}
         )
     assert result.is_error and "user_message" in result.content[0].text
 
@@ -781,9 +781,9 @@ async def test_the_users_words_beat_the_models_language_guess(pos_api):
             await client.call_tool(
                 "create_order",
                 {
-                    "table_name": "Salon 2",
-                    "items": [{"name": "Çay", "quantity": 2}],
-                    "user_message": "Add two teas to Salon 2.",
+                    "table_name": "Hall 2",
+                    "items": [{"name": "Tea", "quantity": 2}],
+                    "user_message": "Add two teas to Hall 2.",
                     "reply_language": "tr",
                 },
             )
@@ -792,8 +792,8 @@ async def test_the_users_words_beat_the_models_language_guess(pos_api):
             await client.call_tool(
                 "create_order",
                 {
-                    "table_name": "Salon 2",
-                    "items": [{"name": "Çay"}],
+                    "table_name": "Hall 2",
+                    "items": [{"name": "Tea"}],
                     "user_message": "ok",  # too short to tell: reply_language decides
                     "reply_language": "tr",
                 },
@@ -842,10 +842,14 @@ async def test_elicitation_asks_in_the_users_language(pos_api):
         paid = data(
             await client.call_tool(
                 "pay_order",
-                {"order_id": order["id"], "method": "card", "user_message": "Kartla kapat"},
+                {
+                    "order_id": order["id"],
+                    "method": "credit_card",
+                    "user_message": "Kartla kapat",
+                },
             )
         )
-    assert "kart ile" in asked[0] and asked[0].endswith("Onaylıyor musunuz? (evet / hayır)")
+    assert "kredi kartı ile" in asked[0] and asked[0].endswith("Onaylıyor musunuz? (evet / hayır)")
     assert paid["summary"].startswith("ÖDENDİ") and paid["answer_the_user_in"] == "Turkish"
 
 
@@ -874,7 +878,7 @@ def test_language_codes_and_neutral_instructions():
     from pos_mcp.confirmation import approves
     from pos_mcp.server import INSTRUCTIONS
 
-    assert i18n.use("Salon 4'e 1 Adana Kebap.") == "tr" and i18n.use("ok", "de") == "de"
+    assert i18n.use("Hall 4'e 1 Adana Kebab.") == "tr" and i18n.use("ok", "de") == "de"
     assert [i18n.code(x) for x in ("en", "EN", "English", "en-US", "Türkçe", "tr", "nl")] == [
         "en",
         "en",
@@ -906,61 +910,61 @@ async def test_a_quantity_the_user_did_not_say_is_not_saved(pos_api):
             client,
             "create_order",
             {
-                "table_name": "Salon 3",
+                "table_name": "Hall 3",
                 "items": [
-                    {"name": "Adana Kebap", "quantity": 1, "options": ["Acılı"]},
+                    {"name": "Adana Kebab", "quantity": 1, "options": ["Acılı"]},
                     {"name": "Ayran", "quantity": 2},
                 ],
-                "user_message": "Salon 3'e 2 acılı Adana ve 2 ayran aç.",
+                "user_message": "Hall 3'e 2 acılı Adana ve 2 ayran aç.",
             },
         )
-        assert result.is_error and "NOT SAVED. Quantity: the user said 2 x Adana Kebap" in text
+        assert result.is_error and "NOT SAVED. Quantity: the user said 2 x Adana Kebab" in text
         assert "but the lines add up to 1." in text and "said 2 x Ayran" not in text
         # the corrected items, ready to copy
         assert (
-            'exactly these items (the rest unchanged): [{"name": "Adana Kebap", "quantity": 2, '
-            '"options": ["Acılı"]}, {"name": "Ayran", "quantity": 2}]' in text
+            'exactly these items (the rest unchanged): [{"name": "Adana Kebab", "quantity": 2, '
+            '"options": ["Spicy"]}, {"name": "Ayran", "quantity": 2}]' in text
         )
-        assert await _open_orders(client, "Salon 3") is None  # nothing was opened
+        assert await _open_orders(client, "Hall 3") is None  # nothing was opened
         fixed = data(
             await client.call_tool(
                 "create_order",
                 {
-                    "table_name": "Salon 3",
+                    "table_name": "Hall 3",
                     "items": [
-                        {"name": "Adana Kebap", "quantity": 2, "options": ["Acılı"]},
+                        {"name": "Adana Kebab", "quantity": 2, "options": ["Acılı"]},
                         {"name": "Ayran", "quantity": 2},
                     ],
-                    "user_message": "Salon 3'e 2 acılı Adana ve 2 ayran aç.",
+                    "user_message": "Hall 3'e 2 acılı Adana ve 2 ayran aç.",
                 },
             )
         )
-    assert "2 x Adana Kebap (Acılı), 2 x Ayran" in fixed["summary"]
+    assert "2 x Adana Kebab (Spicy = acılı), 2 x Ayran" in fixed["summary"]
 
 
 async def test_lines_with_different_options_add_up_to_what_the_user_said(pos_api):
-    message = "Start an order on Salon 4: two Adana kebabs, one spicy and one not spicy."
+    message = "Start an order on Hall 4: two Adana kebabs, one spicy and one not spicy."
     split = [
-        {"name": "Adana Kebap", "quantity": 1, "options": ["spicy"]},
-        {"name": "Adana Kebap", "quantity": 1, "options": ["not spicy"]},
+        {"name": "Adana Kebab", "quantity": 1, "options": ["spicy"]},
+        {"name": "Adana Kebab", "quantity": 1, "options": ["not spicy"]},
     ]
     async with Client(mcp) as client:
         ok = data(
             await client.call_tool(
-                "create_order", {"table_name": "Salon 4", "items": split, "user_message": message}
+                "create_order", {"table_name": "Hall 4", "items": split, "user_message": message}
             )
         )
         three, text = await call(
             client,
             "create_order",
             {
-                "table_name": "Salon 4",
-                "items": [*split, {"name": "Adana Kebap", "quantity": 1, "options": ["mild"]}],
+                "table_name": "Hall 4",
+                "items": [*split, {"name": "Adana Kebab", "quantity": 1, "options": ["mild"]}],
                 "user_message": message,
             },
         )
     assert ok["summary"].startswith("OPENED order")
-    assert three.is_error and "said 2 x Adana Kebap, but the lines add up to 3" in text
+    assert three.is_error and "said 2 x Adana Kebab, but the lines add up to 3" in text
     assert "Put the number the user said in each line's quantity field" in text  # 3 lines for 2
 
 
@@ -969,14 +973,14 @@ async def test_a_missing_table_is_asked_by_the_server_in_the_users_language(pos_
         tr, tr_text = await call(
             client,
             "create_order",
-            {"items": [{"name": "Kola", "quantity": 2}], "user_message": "2 kola ekle."},
+            {"items": [{"name": "Cola", "quantity": 2}], "user_message": "2 kola ekle."},
         )
         en, en_text = await call(
             client,
             "add_items_to_order",
             {
                 "table_name": "?",
-                "items": [{"name": "Kola", "quantity": 2}],
+                "items": [{"name": "Cola", "quantity": 2}],
                 "user_message": "Add two colas.",
             },
         )
@@ -986,14 +990,14 @@ async def test_a_missing_table_is_asked_by_the_server_in_the_users_language(pos_
 
 
 async def test_takeaway_channel_is_inferred_when_the_model_forgets_it(pos_api):
-    """ "Paket servis: 3 acısız lahmacun" left at channel='dine_in' with no table used to make
-    the server ask "which table?" instead of placing the takeaway order (found in testing)."""
+    """ "Paket servis: 3 acısız lahmacun" left at channel='dineIn' with no table used to make
+    the server ask "which table?" instead of placing the pickup order (found in testing)."""
     async with Client(mcp) as client:
         order = data(
             await client.call_tool(
                 "create_order",
                 {
-                    # channel left at its default; the model forgot takeaway has no table
+                    # channel left at its default; the model forgot pickup has no table
                     "items": [{"name": "Lahmacun", "quantity": 3, "options": ["acısız"]}],
                     "user_message": "Paket servis: 3 acısız lahmacun.",
                 },
@@ -1003,12 +1007,12 @@ async def test_takeaway_channel_is_inferred_when_the_model_forgets_it(pos_api):
             await client.call_tool(
                 "create_order",
                 {
-                    "items": [{"name": "Çay", "quantity": 1}],
+                    "items": [{"name": "Tea", "quantity": 1}],
                     "user_message": "Kurye ile 1 çay gönder.",
                 },
             )
         )
-    assert order["channel"] == "takeaway" and order["table"] is None
+    assert order["channel"] == "pickup" and order["table"] is None
     assert delivery["channel"] == "delivery" and delivery["table"] is None
 
 
@@ -1018,13 +1022,13 @@ async def test_takeaway_words_do_not_override_an_explicit_table(pos_api):
             await client.call_tool(
                 "create_order",
                 {
-                    "table_name": "Salon 4",
-                    "items": [{"name": "Çay", "quantity": 1}],
-                    "user_message": "Salon 4'e paket kutusunda servis edilsin, 1 çay aç.",
+                    "table_name": "Hall 4",
+                    "items": [{"name": "Tea", "quantity": 1}],
+                    "user_message": "Hall 4'e paket kutusunda servis edilsin, 1 çay aç.",
                 },
             )
         )
-    assert order["table"] == "Salon 4"
+    assert order["table"] == "Hall 4"
 
 
 async def test_a_spice_level_the_user_did_not_give_is_asked_not_chosen(pos_api):
@@ -1034,19 +1038,19 @@ async def test_a_spice_level_the_user_did_not_give_is_asked_not_chosen(pos_api):
             client,
             "create_order",
             {
-                "table_name": "Salon 4",
-                "items": [{"name": "Adana Kebap", "options": ["Acılı"]}],
-                "user_message": "Salon 4'e 1 Adana Kebap.",
+                "table_name": "Hall 4",
+                "items": [{"name": "Adana Kebab", "options": ["Acılı"]}],
+                "user_message": "Hall 4'e 1 Adana Kebap.",
             },
         )
-        assert await _open_orders(client, "Salon 4") is None
+        assert await _open_orders(client, "Hall 4") is None
         missing, en_text = await call(
             client,
             "create_order",
             {
-                "table_name": "Salon 4",
-                "items": [{"name": "Adana Kebap", "quantity": 2}],
-                "user_message": "Open two Adana kebabs on Salon 4.",
+                "table_name": "Hall 4",
+                "items": [{"name": "Adana Kebab", "quantity": 2}],
+                "user_message": "Open two Adana kebabs on Hall 4.",
             },
         )
         # the user's answer to the question names no item: it is not second-guessed
@@ -1054,20 +1058,21 @@ async def test_a_spice_level_the_user_did_not_give_is_asked_not_chosen(pos_api):
             await client.call_tool(
                 "create_order",
                 {
-                    "table_name": "Salon 4",
-                    "items": [{"name": "Adana Kebap", "options": ["Acılı"]}],
+                    "table_name": "Hall 4",
+                    "items": [{"name": "Adana Kebab", "options": ["Acılı"]}],
                     "user_message": "acılı olsun",
                 },
             )
         )
     assert guessed.is_error
-    assert "ASK_USER: Adana Kebap için acı seviyesi ne olsun: Acılı, Az Acılı ya da Acısız?" in (
-        tr_text
+    assert (
+        "ASK_USER: Adana Kebab için acı seviyesi ne olsun: Spicy (acılı), Mild (az acılı) ya da "
+        "Not Spicy (acısız)?" in tr_text
     )
     assert missing.is_error
     assert (
-        "ASK_USER: Spice level for the 2 Adana Kebap: Acılı (spicy), Az Acılı (mild) or "
-        "Acısız (not spicy)? (If they differ, say e.g. 'one Acılı, one Acısız'.)" in en_text
+        "ASK_USER: Spice Level for the 2 Adana Kebab: Spicy, Mild or Not Spicy? (If they differ, "
+        "say e.g. 'one Spicy, one Not Spicy'.)" in en_text
     )
     assert answered["summary"].startswith("AÇILDI")
 
@@ -1081,7 +1086,7 @@ async def test_table_and_spice_are_asked_together(pos_api):
         )
     assert result.is_error
     question = text.split("ASK_USER: ")[1]
-    assert question.startswith("Hangi masa için?") and "Beyti için acı seviyesi" in question
+    assert question.startswith("Hangi masa için?") and "Beyti Kebab için acı seviyesi" in question
 
 
 async def test_options_in_other_languages_are_not_second_guessed(pos_api):
@@ -1091,14 +1096,14 @@ async def test_options_in_other_languages_are_not_second_guessed(pos_api):
             await client.call_tool(
                 "create_order",
                 {
-                    "channel": "takeaway",
-                    "items": [{"name": "Adana Kebap", "options": ["spicy"]}],
+                    "channel": "pickup",
+                    "items": [{"name": "Adana Kebab", "options": ["spicy"]}],
                     "user_message": "Einmal Adana scharf zum Mitnehmen",
                     "reply_language": "de",
                 },
             )
         )
-    assert order["summary"].startswith("OPENED takeaway order")
+    assert order["summary"].startswith("OPENED pickup order")
 
 
 async def test_two_spicy_and_one_mild_for_two_mixed_adana_gets_two_lines_of_one(pos_api):
@@ -1107,29 +1112,29 @@ async def test_two_spicy_and_one_mild_for_two_mixed_adana_gets_two_lines_of_one(
             client,
             "create_order",
             {
-                "table_name": "Salon 6",
+                "table_name": "Hall 6",
                 "items": [
-                    {"name": "Adana Kebap", "quantity": 2, "options": ["Acılı"]},
-                    {"name": "Adana Kebap", "quantity": 1, "options": ["Acısız"]},
+                    {"name": "Adana Kebab", "quantity": 2, "options": ["Acılı"]},
+                    {"name": "Adana Kebab", "quantity": 1, "options": ["Acısız"]},
                 ],
-                "user_message": "Salon 6'ya 2 Adana aç, biri acılı biri acısız.",
+                "user_message": "Hall 6'ya 2 Adana aç, biri acılı biri acısız.",
             },
         )
     assert result.is_error
     assert (
-        '[{"name": "Adana Kebap", "quantity": 1, "options": ["Acılı"]}, '
-        '{"name": "Adana Kebap", "quantity": 1, "options": ["Acısız"]}]' in text
+        '[{"name": "Adana Kebab", "quantity": 1, "options": ["Spicy"]}, '
+        '{"name": "Adana Kebab", "quantity": 1, "options": ["Not Spicy"]}]' in text
     )
 
 
 async def test_a_note_the_user_did_not_ask_for_is_not_saved(pos_api):
-    message = "Salon 3'e 2 acılı Adana ve 2 ayran aç."
+    message = "Hall 3'e 2 acılı Adana ve 2 ayran aç."
     async with Client(mcp) as client:
         invented, text = await call(
             client,
             "create_order",
             {
-                "table_name": "Salon 3",
+                "table_name": "Hall 3",
                 "items": [
                     {"name": "Adana", "options": ["Acılı"], "note": "soğansız"},
                     {"name": "Ayran", "quantity": 2},
@@ -1137,14 +1142,14 @@ async def test_a_note_the_user_did_not_ask_for_is_not_saved(pos_api):
                 "user_message": message,
             },
         )
-        assert await _open_orders(client, "Salon 3") is None
+        assert await _open_orders(client, "Hall 3") is None
         # a note that only repeats the line (the count went there) is dropped, and the
         # missing quantity is reported with the corrected lines
         repeated, text2 = await call(
             client,
             "create_order",
             {
-                "table_name": "Salon 3",
+                "table_name": "Hall 3",
                 "items": [
                     {"name": "Adana", "options": ["acılı"], "note": "acılı Adana (2 adet)"},
                     {"name": "Ayran", "quantity": 2},
@@ -1156,18 +1161,18 @@ async def test_a_note_the_user_did_not_ask_for_is_not_saved(pos_api):
             await client.call_tool(
                 "create_order",
                 {
-                    "table_name": "Salon 3",
+                    "table_name": "Hall 3",
                     "items": [{"name": "Adana", "options": ["Acılı"], "note": "soğansız"}],
-                    "user_message": "Salon 3'e 1 acılı Adana, soğan olmasın",
+                    "user_message": "Hall 3'e 1 acılı Adana, soğan olmasın",
                 },
             )
         )
     assert invented.is_error
-    assert "Note: the user did not ask for 'soğansız' on Adana Kebap" in text
-    assert "Quantity: the user said 2 x Adana Kebap" in text  # both problems, one refusal
-    assert '{"name": "Adana Kebap", "quantity": 2, "options": ["Acılı"]}' in text
+    assert "Note: the user did not ask for 'soğansız' on Adana Kebab" in text
+    assert "Quantity: the user said 2 x Adana Kebab" in text  # both problems, one refusal
+    assert '{"name": "Adana Kebab", "quantity": 2, "options": ["Spicy"]}' in text
     assert repeated.is_error and "the user did not ask for" not in text2
-    assert '{"name": "Adana Kebap", "quantity": 2, "options": ["Acılı"]}' in text2
+    assert '{"name": "Adana Kebab", "quantity": 2, "options": ["Spicy"]}' in text2
     assert said["items"][0]["note"] == "soğansız"
 
 
@@ -1177,7 +1182,7 @@ async def test_a_note_that_only_repeats_the_line_is_dropped(pos_api):
             await client.call_tool(
                 "create_order",
                 {
-                    "table_name": "Salon 3",
+                    "table_name": "Hall 3",
                     "items": [
                         {
                             "name": "Adana",
@@ -1186,7 +1191,7 @@ async def test_a_note_that_only_repeats_the_line_is_dropped(pos_api):
                             "note": "2 acılı Adana",
                         }
                     ],
-                    "user_message": "Salon 3'e 2 acılı Adana",
+                    "user_message": "Hall 3'e 2 acılı Adana",
                 },
             )
         )

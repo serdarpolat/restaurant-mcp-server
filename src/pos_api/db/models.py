@@ -6,7 +6,8 @@ Design notes:
 - Stock is tracked both as a current level (`Ingredient.stock_qty`) and as an
   append-only ledger (`StockMovement`) so "why did X run low?" is answerable.
 - `AuditLog` records every write performed through the MCP server (AI actions).
-- There is intentionally no customer table: no personal data is stored (privacy by design).
+- `User` is a demo-only customer record (registered or guest); `Order.user_id` is
+  optional because orders placed live through the MCP tools have no sign-in step.
 """
 
 from datetime import datetime
@@ -36,8 +37,8 @@ class TableStatus(str, Enum):
 
 
 class OrderChannel(str, Enum):
-    dine_in = "dine_in"
-    takeaway = "takeaway"
+    dineIn = "dineIn"
+    pickup = "pickup"
     delivery = "delivery"
 
 
@@ -54,8 +55,15 @@ class OrderItemStatus(str, Enum):
 
 class PaymentMethod(str, Enum):
     cash = "cash"
-    card = "card"
-    online = "online"
+    credit_card = "credit_card"
+    meal_voucher = "meal_voucher"
+    apple_pay = "apple_pay"
+    google_pay = "google_pay"
+
+
+class UserType(str, Enum):
+    registered = "registered"
+    guest = "guest"
 
 
 class StockReason(str, Enum):
@@ -74,6 +82,22 @@ class Staff(SQLModel, table=True):
     name: str
     role: StaffRole
     is_active: bool = True
+
+
+# ---------- Customers ----------
+
+
+class User(SQLModel, table=True):
+    """A demo-only customer record. A guest row is created per guest order (no
+    persistent guest identity), like a real guest checkout."""
+
+    __tablename__ = "users"  # "user" is reserved in some SQL dialects
+
+    id: int | None = Field(default=None, primary_key=True)
+    type: UserType
+    name: str
+    email: str | None = None
+    created_at: datetime
 
 
 # ---------- Menu ----------
@@ -184,6 +208,7 @@ class Order(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     table_id: int | None = Field(default=None, foreign_key="dining_table.id", index=True)
     staff_id: int | None = Field(default=None, foreign_key="staff.id", index=True)
+    user_id: int | None = Field(default=None, foreign_key="users.id", index=True)
     channel: OrderChannel
     status: OrderStatus = OrderStatus.open
     opened_at: datetime = Field(index=True)
@@ -203,7 +228,7 @@ class OrderItem(SQLModel, table=True):
     menu_item_id: int = Field(foreign_key="menuitem.id", index=True)
     quantity: int = 1
     unit_price: Decimal = money()  # snapshot incl. modifiers
-    modifiers: str = ""  # human-readable, e.g. "Acısız, 1.5 Porsiyon"
+    modifiers: str = ""  # human-readable, e.g. "Not Spicy, 1.5 Portion"
     note: str = ""
     status: OrderItemStatus = OrderItemStatus.active
     void_reason: str | None = None

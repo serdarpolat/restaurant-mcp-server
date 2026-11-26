@@ -4,10 +4,10 @@ from collections.abc import Iterable
 from decimal import ROUND_CEILING, Decimal
 
 # Modifiers that scale how much of every ingredient a portion uses.
-PORTION_MULTIPLIERS = {"1.5 Porsiyon": Decimal("1.5")}
+PORTION_MULTIPLIERS = {"1.5 Portion": Decimal("1.5")}
 
-# Units that only exist in whole pieces: a kitchen cannot use 1.5 lavaş or half a can of cola.
-COUNT_UNITS = frozenset({"adet"})
+# Units that only exist in whole pieces: a kitchen cannot use 1.5 flatbreads or half a can of cola.
+COUNT_UNITS = frozenset({"piece"})
 
 
 def portion_multiplier(modifier_names: Iterable[str]) -> Decimal:

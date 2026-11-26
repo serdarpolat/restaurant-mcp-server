@@ -59,7 +59,7 @@ def _build_line(session: Session, data: OrderItemCreate) -> tuple[OrderItem, lis
     if not item.is_active:
         raise Conflict(f"'{item.name}' is not available right now.")
 
-    # The same option twice is one choice ("Acısız", "Acısız").
+    # The same option twice is one choice ("Not Spicy", "Not Spicy").
     chosen = [session.get(Modifier, mid) for mid in dict.fromkeys(data.modifier_ids)]
     if any(m is None for m in chosen):
         raise Invalid(f"Unknown modifier id in {data.modifier_ids}.")
@@ -137,7 +137,7 @@ def _consume_stock(
                 ingredient_id=i,
                 change=-needed[i],
                 reason=StockReason.sale,
-                note=f"Sipariş #{order_id}",
+                note=f"Order #{order_id}",
                 created_at=ts,
             )
         )
@@ -159,7 +159,7 @@ def _return_stock(session: Session, order_id: int, lines: list[OrderItem]) -> No
                 ingredient_id=i,
                 change=qty,
                 reason=StockReason.returned,
-                note=f"İade: Sipariş #{order_id}",
+                note=f"Refund: Order #{order_id}",
                 created_at=ts,
             )
         )
@@ -179,7 +179,7 @@ def recompute_totals(order: Order) -> None:
 
 def create_order(session: Session, data: OrderCreate, actor: str) -> Order:
     table = None
-    if data.channel == OrderChannel.dine_in:
+    if data.channel == OrderChannel.dineIn:
         if data.table_id is None:
             raise Invalid("Dine-in orders need a table_id.")
         table = session.get(DiningTable, data.table_id)
@@ -203,6 +203,7 @@ def create_order(session: Session, data: OrderCreate, actor: str) -> Order:
         channel=data.channel,
         table_id=table.id if table else None,
         staff_id=data.staff_id,
+        user_id=data.user_id,
         status=OrderStatus.open,
         opened_at=now(),
     )

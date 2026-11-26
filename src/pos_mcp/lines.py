@@ -16,33 +16,34 @@ class LineError(ValueError):
     """A line that cannot be resolved; the message tells the model how to fix it."""
 
 
-# English (and loose Turkish) ways to say an option -> the option's normalized name.
+# Turkish (and loose English) ways to say an option -> the option's normalized English name,
+# since the menu data is now English but guests and agents may still say it in Turkish.
 OPTION_ALIASES: dict[str, str] = {
-    "spicy": "acili",
-    "hot": "acili",
-    "very spicy": "acili",
-    "mild": "az acili",
-    "medium": "az acili",
-    "medium spicy": "az acili",
-    "a little spicy": "az acili",
-    "slightly spicy": "az acili",
-    "not spicy": "acisiz",
-    "no spice": "acisiz",
-    "non spicy": "acisiz",
-    "without spice": "acisiz",
-    "no chili": "acisiz",
-    "not hot": "acisiz",
-    "large": "buyuk boy",
-    "big": "buyuk boy",
-    "buyuk": "buyuk boy",
-    "large portion": "1 5 porsiyon",
-    "big portion": "1 5 porsiyon",
-    "one and a half": "1 5 porsiyon",
-    "one and a half portion": "1 5 porsiyon",
-    "1 5": "1 5 porsiyon",
-    "bir bucuk": "1 5 porsiyon",
-    "extra cheese": "ekstra kasar",
-    "extra egg": "ekstra yumurta",
+    "acili": "spicy",
+    "hot": "spicy",
+    "very spicy": "spicy",
+    "az acili": "mild",
+    "medium": "mild",
+    "medium spicy": "mild",
+    "a little spicy": "mild",
+    "slightly spicy": "mild",
+    "acisiz": "not spicy",
+    "no spice": "not spicy",
+    "non spicy": "not spicy",
+    "without spice": "not spicy",
+    "no chili": "not spicy",
+    "not hot": "not spicy",
+    "buyuk boy": "large",
+    "big": "large",
+    "buyuk": "large",
+    "large portion": "1 5 portion",
+    "big portion": "1 5 portion",
+    "one and a half": "1 5 portion",
+    "one and a half portion": "1 5 portion",
+    "1 5": "1 5 portion",
+    "bir bucuk": "1 5 portion",
+    "ekstra kasar": "extra cheese",
+    "ekstra yumurta": "extra egg",
 }
 
 
@@ -51,7 +52,7 @@ def _key(text: str) -> str:
 
 
 def same_item_name(said: str, actual: str) -> bool:
-    """'lahmacun' / 'Lahmacun', 'adana kebab' / 'Adana Kebap', 'adana' / 'Adana Kebap'."""
+    """'lahmacun' / 'Lahmacun', 'adana kebab' / 'Adana Kebab', 'adana' / 'Adana Kebab'."""
     return _key(said) == _key(actual) or matches(said, actual)
 
 
@@ -133,7 +134,7 @@ def resolve_line(
 
 
 def same_table(said: str, actual: str) -> bool:
-    """'Teras 1' == 'teras 1' == 'teras1' == 'Teras 1 masası', but 'Salon 10' != 'Salon 1'."""
+    """'Terrace 1' == 'terrace 1' == 'terrace1' == 'Terrace 1 masası', but 'Hall 10' != 'Hall 1'."""
     s, a = normalize(said), normalize(actual)
     if s.replace(" ", "") == a.replace(" ", ""):
         return True
@@ -163,7 +164,7 @@ def resolve_day(value: str | None, today: date) -> str | None:
 
 
 def merge_lines(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Identical lines become one: '1 x Adana (Acılı)' twice = '2 x Adana (Acılı)'."""
+    """Identical lines become one: '1 x Adana (Spicy)' twice = '2 x Adana (Spicy)'."""
     merged: dict[tuple, dict[str, Any]] = {}
     for line in lines:
         key = (line["menu_item_id"], tuple(sorted(line["modifier_ids"])), line.get("note", ""))

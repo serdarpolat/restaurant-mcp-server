@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 
 from pos_api.db.database import create_db_and_tables
 from pos_api.errors import DomainError
-from pos_api.routers import audit, inventory, menu, orders, reports, staff, tables
+from pos_api.routers import audit, inventory, menu, orders, reports, staff, tables, users
 
 
 @asynccontextmanager
@@ -38,5 +38,5 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-for module in (menu, tables, orders, inventory, reports, staff, audit):
+for module in (menu, tables, orders, inventory, reports, staff, users, audit):
     app.include_router(module.router)

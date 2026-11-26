@@ -1,17 +1,18 @@
 """The user's language for what write tools say back.
 
-The menu, option and table names are Turkish data, and a model that copies a result such as
-"OPENED order #12 on Salon 4: 1 x Adana Kebap (Acılı)" into its answer tends to drift into
-Turkish even when the user wrote in English. So every write tool takes `reply_language`, and
-the server writes its summaries, previews and approval questions in that language: the text
-the model is most likely to copy is already in the user's language. This works in every MCP
-client, because tool results always reach the model (server instructions may not).
+The menu, option and table names are English data, but guests and AI agents (this project's
+whole premise) often write in Turkish, and a model that copies a result such as "OPENED order
+#12 on Hall 4: 1 x Adana Kebab (Spicy)" into its answer tends to drift into English even when
+the user wrote in Turkish. So every write tool takes `reply_language`, and the server writes
+its summaries, previews and approval questions in that language: the text the model is most
+likely to copy is already in the user's language. This works in every MCP client, because
+tool results always reach the model (server instructions may not).
 
 Which language? Small models judge it badly: asked for "the language of the user's
-message", a 24B model wrote 'tr' for half of the English requests (the restaurant is
-Turkish) and 'en' for some Turkish ones. Copying text is easier than classifying it, so write
-tools also take user_message, the user's words verbatim, and the server detects the language
-itself (language.detect_message, Turkish/English). reply_language is the fallback for other
+message", a 24B model wrote 'en' for half of the Turkish requests (the data is English) and
+'tr' for some English ones. Copying text is easier than classifying it, so write tools also
+take user_message, the user's words verbatim, and the server detects the language itself
+(language.detect_message, Turkish/English). reply_language is the fallback for other
 languages and for messages too short to tell ("ok").
 
 Turkish and English texts are written out; any other language gets English text plus an
@@ -119,25 +120,25 @@ def reply_note() -> dict[str, str]:
 
 
 # --------------------------------------------------------------------------- #
-# Option names: Turkish data, glossed for non-Turkish users ("Acılı (spicy)")
+# Option names: English data, glossed for Turkish-speaking users ("Spicy (acılı)")
 # --------------------------------------------------------------------------- #
 
 OPTION_GLOSS = {
-    "acili": "spicy",
-    "az acili": "mild",
-    "acisiz": "not spicy",
-    "buyuk boy": "large",
-    "1.5 porsiyon": "1.5 portions",
-    "ekstra kasar": "extra cheese",
-    "ekstra yumurta": "extra egg",
+    "spicy": "acılı",
+    "mild": "az acılı",
+    "not spicy": "acısız",
+    "large": "büyük boy",
+    "1.5 portion": "1.5 porsiyon",
+    "extra cheese": "ekstra kaşar",
+    "extra egg": "ekstra yumurta",
 }
 
 
 GROUP_GLOSS = {
-    "aci seviyesi": "Spice level",
-    "porsiyon": "Portion",
-    "boy": "Size",
-    "pide ekstralari": "Extras",
+    "spice level": "Acı seviyesi",
+    "portion": "Porsiyon",
+    "size": "Boy",
+    "pide extras": "Pide ekstraları",
 }
 
 
@@ -146,23 +147,24 @@ def _turkish_lower(text: str) -> str:
 
 
 def ask_option(item: str, group: dict[str, Any], quantity: int = 1) -> str:
-    """'Adana Kebap için acı seviyesi ne olsun: Acılı, Az Acılı ya da Acısız?' /
-    'Spice level for the Adana Kebap: Acılı (spicy), Az Acılı (mild) or Acısız (not spicy)?'"""
+    """'Spice level for the Adana Kebab: Spicy, Mild or Not Spicy?' /
+    'Adana Kebab için acı seviyesi ne olsun: Spicy (acılı), Mild (az acılı) ya da
+    Not Spicy (acısız)?'"""
     turkish = current() == "tr"
     names = [m["name"] for m in group["modifiers"]]
     shown = (
-        names
-        if turkish
-        else [
+        [
             f"{n} ({OPTION_GLOSS[normalize(n)]})" if normalize(n) in OPTION_GLOSS else n
             for n in names
         ]
+        if turkish
+        else names
     )
     choices = shown[0] if len(shown) == 1 else f"{', '.join(shown[:-1])} {t('or')} {shown[-1]}"
     label = (
-        _turkish_lower(group["name"])
+        _turkish_lower(GROUP_GLOSS.get(normalize(group["name"]), group["name"]))
         if turkish
-        else GROUP_GLOSS.get(normalize(group["name"]), group["name"])
+        else group["name"]
     )
     if quantity > 1:
         item = f"{quantity} {item}"
@@ -173,8 +175,8 @@ def ask_option(item: str, group: dict[str, Any], quantity: int = 1) -> str:
 
 
 def options(text: str) -> str:
-    """'Acılı, Büyük Boy' -> 'Acılı = spicy, Büyük Boy = large' unless replying in Turkish."""
-    if current() == "tr" or not text:
+    """'Spicy, Large' -> 'Spicy = acılı, Large = büyük boy' when replying in Turkish."""
+    if current() != "tr" or not text:
         return text
     out = []
     for part in (p.strip() for p in text.split(",")):
@@ -264,7 +266,7 @@ _TEXT: dict[str, dict[str, str]] = {
     },
     # questions the server writes for the user (missing table or required choice)
     "ask_table": {
-        "en": "Which table is this for? (Or is it takeaway or delivery?)",
+        "en": "Which table is this for? (Or is it pickup or delivery?)",
         "tr": "Hangi masa için? (Paket servis ya da kurye ise onu söyleyin.)",
     },
     "ask_option": {
@@ -277,11 +279,13 @@ _TEXT: dict[str, dict[str, str]] = {
     },
     "or": {"en": "or", "tr": "ya da"},
     "method_cash": {"en": "cash", "tr": "nakit"},
-    "method_card": {"en": "card", "tr": "kart"},
-    "method_online": {"en": "online payment", "tr": "online ödeme"},
-    "channel_takeaway": {"en": "takeaway", "tr": "paket servis"},
+    "method_credit_card": {"en": "credit card", "tr": "kredi kartı"},
+    "method_meal_voucher": {"en": "meal voucher", "tr": "yemek çeki"},
+    "method_apple_pay": {"en": "Apple Pay", "tr": "Apple Pay"},
+    "method_google_pay": {"en": "Google Pay", "tr": "Google Pay"},
+    "channel_pickup": {"en": "pickup", "tr": "paket servis"},
     "channel_delivery": {"en": "delivery", "tr": "kurye"},
-    "channel_dine_in": {"en": "dine-in", "tr": "masa"},
+    "channel_dineIn": {"en": "dine-in", "tr": "masa"},
 }
 
 

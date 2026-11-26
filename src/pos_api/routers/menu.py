@@ -25,7 +25,7 @@ def _item_read(item: MenuItem) -> MenuItemRead:
 
 
 def check_category(session, category: str) -> list[str]:
-    """The category names meant ("soups" -> ["Çorbalar"]); unknown ones get the valid list
+    """The category names meant ("corba" -> ["Soups"]); unknown ones get the valid list
     back, so an agent can retry."""
     names = session.exec(select(Category.name).order_by(Category.sort_order)).all()
     found = [n for n in names if matches(category, n)]

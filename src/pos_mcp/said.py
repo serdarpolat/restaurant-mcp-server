@@ -3,17 +3,17 @@
 Write tools receive user_message, the user's latest message word for word. The server reads
 it to catch two silent errors of small models before anything is saved:
 
-- quantities: "Salon 3'e 2 acılı Adana" sent as 1 x Adana Kebap (the model's answer then
+- quantities: "Salon 3'e 2 acılı Adana" sent as 1 x Adana Kebab (the model's answer then
   says "2 Adana" while the order has one: a wrong bill nobody notices);
-- options chosen for the user: "Salon 4'e 1 Adana" sent with 'Acılı' although the user never
+- options chosen for the user: "Salon 4'e 1 Adana" sent with 'Spicy' although the user never
   said how spicy.
 
 The eval uses the same reader on the model's final answer, to check that what the model
 tells the user matches what was saved.
 
 Deliberately conservative: a quantity counts only when a number stands right before an
-item's name ("2 çay", "three lahmacun", "1 x Ayran") or right after it with a unit
-("Ayran: 2 adet"). Anything unclear (no number, an item not in the order, a name with a
+item's name ("2 tea", "three lahmacun", "1 x Ayran") or right after it with a unit
+("Ayran: 2 pcs"). Anything unclear (no number, an item not in the order, a name with a
 case suffix such as "Adana'yı", which refers to something already ordered) is skipped, so a
 correct order is never refused because of how the user phrased it.
 """
@@ -22,7 +22,15 @@ import re
 from collections.abc import Iterable
 from typing import Any
 
-from pos_api.text import normalize, word_matches, words
+from pos_api.text import GLOSSARY, normalize, word_matches, words
+
+# GLOSSARY maps Turkish stems to the English words now on the menu (text.py's search
+# direction). _stems needs both directions: an English message ("no onions") must still
+# verify a Turkish note ("soğansız"), so this is GLOSSARY read backwards once, at import time.
+_REVERSE_GLOSSARY: dict[str, list[str]] = {}
+for _k, _vs in GLOSSARY.items():
+    for _v in _vs:
+        _REVERSE_GLOSSARY.setdefault(_v, []).append(_k)
 
 NUMBERS_EN = {
     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
@@ -34,7 +42,10 @@ NUMBERS_TR = {
 }  # fmt: skip
 # "on" is 10 in Turkish but a preposition in English ("on Salon 4").
 _AMBIGUOUS = {"on": "tr"}
-UNITS = {"adet", "tane", "porsiyon", "x", "servings", "serving", "pieces", "piece", "pcs"}
+UNITS = {
+    "adet", "tane", "porsiyon", "x", "servings", "serving", "pieces", "piece", "pcs",
+    "portion", "portions",
+}  # fmt: skip
 _FRACTION = {"bucuk", "half", "yarim"}
 MAX_QUANTITY = 50
 _WINDOW = 4  # words between a number and the item's name ("2 büyük boy acısız ayran")
@@ -88,9 +99,9 @@ def _number(token: str, lang: str | None) -> int | None:
 
 
 def _names(token: str, item_name: str) -> bool:
-    """Does the token name this item? Its first word decides ('adana' -> 'Adana Kebap',
-    'teas' -> 'Çay', 'turnip' -> 'Şalgam'); a token with a case suffix ('adana'yı') does
-    not, because it points at something already ordered."""
+    """Does the token name this item? Its first word decides ('adana' -> 'Adana Kebab',
+    'teas' -> 'Tea', 'turnip' -> 'Turnip Juice'); a token with a case suffix ('adana'yı')
+    does not, because it points at something already ordered."""
     if "'" in token or "’" in token or token == _TABLE or len(token) < 2:
         return False
     first = words(item_name)[:1]
@@ -103,8 +114,8 @@ def _names(token: str, item_name: str) -> bool:
 
 
 def _item_at(tokens: list[str], i: int, items: dict[int, str]) -> int | None:
-    """The single item named by tokens[i] (the next word decides between 'Tavuk Şiş' and
-    'Tavuk Kanat'); None if none or still ambiguous."""
+    """The single item named by tokens[i] (the next word decides between 'Chicken Shish' and
+    'Chicken Wings'); None if none or still ambiguous."""
     hits = [iid for iid, name in items.items() if _names(tokens[i], name)]
     if len(hits) > 1 and i + 1 < len(tokens):
         nxt = tokens[i + 1]
@@ -126,7 +137,7 @@ def quantities(
     """Quantities the text states for these items {menu_item_id: name} -> {id: total}.
 
     "2 acılı Adana ve 2 ayran" -> {Adana: 2, Ayran: 2}; "one spicy Adana and one mild Adana"
-    -> {Adana: 2}; "Adana Kebap (Acılı): 1 adet" -> {Adana: 1}. Items without a clear number
+    -> {Adana: 2}; "Adana Kebab (Spicy): 1 pcs" -> {Adana: 1}. Items without a clear number
     are left out.
     """
     found: dict[int, int] = {}
@@ -142,7 +153,7 @@ def quantity_mentions(
     lang: str | None = None,
 ) -> list[tuple[int, int]]:
     """Every (item, number) the text states, in order: an answer may name an item twice
-    ("2 çay eklendi: 2 x Çay") where a request names it once per group of units."""
+    ("2 tea added: 2 x Tea") where a request names it once per group of units."""
     tokens = _tokens(text, table_names)
     found: list[tuple[int, int]] = []
     used: set[int] = set()
@@ -194,27 +205,27 @@ def mentions(text: str, item_name: str, table_names: Iterable[str] = ()) -> bool
 # Words that say an order has no table, by themselves: the model may still default to
 # dine-in and either leave the table out or ask which table (server.py's _NO_TABLE
 # covers the same words when the model names a "table" that is really the channel).
-_TAKEAWAY_WORDS = {"paket", "takeaway", "togo"}
+_PICKUP_WORDS = {"paket", "pickup", "takeaway", "togo"}
 _DELIVERY_WORDS = {"kurye", "delivery", "deliver"}
 _PICKUP_PHRASE = ("gel", "al")  # "gel al" = "come and get it"
 
 
 def channel_from_message(text: str) -> str | None:
-    """'takeaway', 'delivery' or None: did the user say this order has no table?
+    """'pickup', 'delivery' or None: did the user say this order has no table?
 
     A safety net for create_order: a model that reads "Paket servis: 3 lahmacun" may
-    still leave channel at its 'dine_in' default and ask which table instead of placing
-    a takeaway order. Only used when the model gave no table either way.
+    still leave channel at its 'dineIn' default and ask which table instead of placing
+    a pickup order. Only used when the model gave no table either way.
     """
     tokens = _tokens(text)
     words_here = set(tokens)
     if words_here & _DELIVERY_WORDS:
         return "delivery"
-    if words_here & _TAKEAWAY_WORDS:
-        return "takeaway"
+    if words_here & _PICKUP_WORDS:
+        return "pickup"
     for i in range(len(tokens) - 1):
         if (tokens[i], tokens[i + 1]) == _PICKUP_PHRASE:
-            return "takeaway"
+            return "pickup"
     return None
 
 
@@ -244,8 +255,8 @@ def table_from_message(text: str, table_names: Iterable[str]) -> str | None:
 
 # Words that are about an option group without naming one choice: "acı olmasın", "spice".
 GROUP_WORDS = {
-    "aci seviyesi": {"aci", "acili", "acisiz", "biber", "spicy", "spice", "hot", "mild",
-                     "chili", "chilli", "pepper", "medium"},
+    "spice level": {"aci", "acili", "acisiz", "biber", "spicy", "spice", "hot", "mild",
+                    "chili", "chilli", "pepper", "medium"},
 }  # fmt: skip
 _GENERIC = {"a", "no", "not", "non", "without", "little", "very", "slightly", "boy", "and"}
 
@@ -285,16 +296,16 @@ _NOTE_FILLERS = {
 # Words of the order itself, not of a kitchen request: a note made of these (and of item,
 # option and table names) only restates the order ("paket servis için 3 adet", "Salon 3").
 _ORDER_WORDS = {
-    "paket", "servis", "takeaway", "delivery", "kurye", "gel", "al", "masa", "masasi", "table",
-    "siparis", "order", "ac", "ekle", "open", "add", "start", "tl", "try", "lira", "toplam",
-    "total", "fiyat", "price",
+    "paket", "servis", "takeaway", "pickup", "delivery", "kurye", "gel", "al", "masa", "masasi",
+    "table", "siparis", "order", "ac", "ekle", "open", "add", "start", "tl", "try", "lira",
+    "toplam", "total", "fiyat", "price",
 }  # fmt: skip
 
 
 def _stems(text: str, table_names: Iterable[str]) -> set[str]:
-    """The message's words, plus the Turkish stems of English ones ('onions' -> 'sogan')."""
-    from pos_api.text import GLOSSARY
-
+    """The message's words, plus whatever GLOSSARY says the same thing in the other language
+    ('soğan' -> 'onion', and 'onion' -> 'soğan'), so a note is verified against the user's
+    words regardless of which language the message and the note each happen to use."""
     out: set[str] = set()
     for token in _tokens(text, table_names):
         token = re.split(r"['’]", token)[0]
@@ -303,6 +314,7 @@ def _stems(text: str, table_names: Iterable[str]) -> set[str]:
         out.add(token)
         for form in (token, token.removesuffix("s")):
             out.update(GLOSSARY.get(form, ()))
+            out.update(_REVERSE_GLOSSARY.get(form, ()))
     return out
 
 
@@ -323,7 +335,7 @@ def note_words(
 ) -> list[str]:
     """The words of a note that add something: not the names of the order's items (also
     misspelt: 'Kabab'), the line's options, tables, numbers, units, order or linking words
-    ('acılı Adana (2 adet)' adds nothing to an Acılı Adana line)."""
+    ('Spicy Adana (2 pcs)' adds nothing to a Spicy Adana line)."""
     names_of_items = [detail["name"], *also_known]
     item_words = [w for n in names_of_items for w in words(n)]
     known = set(item_words)

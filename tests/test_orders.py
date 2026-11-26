@@ -9,10 +9,10 @@ ACTOR = {"X-Actor": "mcp:test"}
 
 
 def _adana_order(client, table_id: int, quantity: int = 2) -> dict:
-    adana = find_item(client, "Adana Kebap")
-    spicy = modifier_id(client, adana["id"], "Acılı")
+    adana = find_item(client, "Adana Kebab")
+    spicy = modifier_id(client, adana["id"], "Spicy")
     return {
-        "channel": "dine_in",
+        "channel": "dineIn",
         "table_id": table_id,
         "items": [{"menu_item_id": adana["id"], "quantity": quantity, "modifier_ids": [spicy]}],
     }
@@ -20,14 +20,14 @@ def _adana_order(client, table_id: int, quantity: int = 2) -> dict:
 
 def test_required_modifier_error_lists_options(client):
     table = free_table(client)
-    adana = find_item(client, "Adana Kebap")
+    adana = find_item(client, "Adana Kebab")
     r = client.post(
         "/orders",
         json={"table_id": table["id"], "items": [{"menu_item_id": adana["id"]}]},
     )
     assert r.status_code == 422
-    assert "Acı Seviyesi" in r.json()["detail"]
-    assert "Acısız" in r.json()["detail"]  # options are listed so an agent can ask the user
+    assert "Spice Level" in r.json()["detail"]
+    assert "Not Spicy" in r.json()["detail"]  # options are listed so an agent can ask the user
 
 
 def test_two_options_on_one_line_suggests_separate_lines(client):
@@ -38,8 +38,8 @@ def test_two_options_on_one_line_suggests_separate_lines(client):
     r = client.post(
         "/orders",
         json={
-            "channel": "takeaway",
-            "items": [{**line, "modifier_ids": [spice["Acılı"], spice["Acısız"]]}],
+            "channel": "pickup",
+            "items": [{**line, "modifier_ids": [spice["Spicy"], spice["Not Spicy"]]}],
         },
     )
     assert r.status_code == 422
@@ -47,19 +47,19 @@ def test_two_options_on_one_line_suggests_separate_lines(client):
     r = client.post(
         "/orders",
         json={
-            "channel": "takeaway",
+            "channel": "pickup",
             "items": [
-                {"menu_item_id": adana["id"], "modifier_ids": [spice["Acılı"]]},
-                {"menu_item_id": adana["id"], "modifier_ids": [spice["Acısız"]]},
+                {"menu_item_id": adana["id"], "modifier_ids": [spice["Spicy"]]},
+                {"menu_item_id": adana["id"], "modifier_ids": [spice["Not Spicy"]]},
             ],
         },
     )
     assert r.status_code == 201, r.text
-    assert sorted(i["modifiers"] for i in r.json()["items"]) == ["Acılı", "Acısız"]
+    assert sorted(i["modifiers"] for i in r.json()["items"]) == ["Not Spicy", "Spicy"]
 
 
 def test_create_order_prices_occupies_table_consumes_stock_and_audits(client, session):
-    kiyma_before = session.exec(select(Ingredient).where(Ingredient.name == "Dana Kıyma")).one()
+    kiyma_before = session.exec(select(Ingredient).where(Ingredient.name == "Ground Beef")).one()
     before = kiyma_before.stock_qty
     table = free_table(client)
 
@@ -67,13 +67,13 @@ def test_create_order_prices_occupies_table_consumes_stock_and_audits(client, se
     assert r.status_code == 201, r.text
     order = r.json()
     assert order["status"] == "open"
-    assert order["total"] == 2 * find_item(client, "Adana Kebap")["price"]
-    assert order["items"][0]["modifiers"] == "Acılı"
+    assert order["total"] == 2 * find_item(client, "Adana Kebab")["price"]
+    assert order["items"][0]["modifiers"] == "Spicy"
 
     assert client.get(f"/tables/{table['id']}").json()["open_order_id"] == order["id"]
 
     session.expire_all()
-    after = session.exec(select(Ingredient).where(Ingredient.name == "Dana Kıyma")).one()
+    after = session.exec(select(Ingredient).where(Ingredient.name == "Ground Beef")).one()
     assert before - after.stock_qty == Decimal("0.4")
 
     log = client.get("/audit-log", params={"actor": "mcp:test"}).json()
@@ -89,20 +89,20 @@ def test_cannot_open_second_order_on_occupied_table(client):
 
 
 def test_takeaway_cannot_have_table(client):
-    payload = _adana_order(client, 1) | {"channel": "takeaway"}
+    payload = _adana_order(client, 1) | {"channel": "pickup"}
     assert client.post("/orders", json=payload).status_code == 422
 
 
 def test_portion_modifier_adds_price(client):
-    adana = find_item(client, "Adana Kebap")
+    adana = find_item(client, "Adana Kebab")
     payload = {
-        "channel": "takeaway",
+        "channel": "pickup",
         "items": [
             {
                 "menu_item_id": adana["id"],
                 "modifier_ids": [
-                    modifier_id(client, adana["id"], "Acısız"),
-                    modifier_id(client, adana["id"], "1.5 Porsiyon"),
+                    modifier_id(client, adana["id"], "Not Spicy"),
+                    modifier_id(client, adana["id"], "1.5 Portion"),
                 ],
             }
         ],
@@ -120,20 +120,23 @@ def test_add_void_pay_flow(client):
         f"/orders/{order['id']}/items",
         json={"items": [{"menu_item_id": ayran["id"], "quantity": 2}]},
     ).json()
-    assert order["total"] == find_item(client, "Adana Kebap")["price"] + 2 * ayran["price"]
+    assert order["total"] == find_item(client, "Adana Kebab")["price"] + 2 * ayran["price"]
 
     ayran_line = next(i for i in order["items"] if i["name"] == "Ayran")
     order = client.post(
-        f"/orders/{order['id']}/items/{ayran_line['id']}/void", json={"reason": "Müşteri vazgeçti"}
+        f"/orders/{order['id']}/items/{ayran_line['id']}/void",
+        json={"reason": "Customer changed their mind"},
     ).json()
-    assert order["total"] == find_item(client, "Adana Kebap")["price"]
+    assert order["total"] == find_item(client, "Adana Kebab")["price"]
 
-    r = client.post(f"/orders/{order['id']}/pay", json={"method": "card", "discount_rate": 0.1})
+    r = client.post(
+        f"/orders/{order['id']}/pay", json={"method": "credit_card", "discount_rate": 0.1}
+    )
     assert r.status_code == 422  # discount without a reason
 
     paid = client.post(
         f"/orders/{order['id']}/pay",
-        json={"method": "card", "discount_rate": 0.1, "discount_reason": "Sadakat indirimi"},
+        json={"method": "credit_card", "discount_rate": 0.1, "discount_reason": "Loyalty discount"},
     ).json()
     assert paid["status"] == "paid"
     assert paid["discount"] == round(paid["subtotal"] * 0.1, 2)
@@ -148,7 +151,7 @@ def test_cancel_order_frees_table(client):
     table = free_table(client)
     order = client.post("/orders", json=_adana_order(client, table["id"])).json()
     cancelled = client.post(
-        f"/orders/{order['id']}/cancel", json={"reason": "Müşteri gitti"}
+        f"/orders/{order['id']}/cancel", json={"reason": "Customer left"}
     ).json()
     assert cancelled["status"] == "cancelled"
     assert cancelled["total"] == 0
@@ -157,15 +160,13 @@ def test_cancel_order_frees_table(client):
 
 
 def test_insufficient_stock_is_refused(client, session):
-    patlican = session.exec(select(Ingredient).where(Ingredient.name == "Patlıcan")).one()
-    patlican.stock_qty = Decimal("0.1")
+    eggplant = session.exec(select(Ingredient).where(Ingredient.name == "Eggplant")).one()
+    eggplant.stock_qty = Decimal("0.1")
     session.commit()
     item = find_item(client, "Ali Nazik")
-    r = client.post(
-        "/orders", json={"channel": "takeaway", "items": [{"menu_item_id": item["id"]}]}
-    )
+    r = client.post("/orders", json={"channel": "pickup", "items": [{"menu_item_id": item["id"]}]})
     assert r.status_code == 409
-    assert "Patlıcan" in r.json()["detail"]
+    assert "Eggplant" in r.json()["detail"]
 
 
 def test_table_with_open_order_cannot_be_freed(client):
@@ -181,40 +182,40 @@ def _stock(session, name: str) -> Decimal:
 
 
 def test_count_ingredients_are_used_in_whole_pieces(client, session):
-    adana = find_item(client, "Adana Kebap")
-    lavas, kiyma = _stock(session, "Lavaş"), _stock(session, "Dana Kıyma")
+    adana = find_item(client, "Adana Kebab")
+    flatbread, kiyma = _stock(session, "Flatbread"), _stock(session, "Ground Beef")
     line = {
         "menu_item_id": adana["id"],
         "modifier_ids": [
-            modifier_id(client, adana["id"], "Acısız"),
-            modifier_id(client, adana["id"], "1.5 Porsiyon"),
+            modifier_id(client, adana["id"], "Not Spicy"),
+            modifier_id(client, adana["id"], "1.5 Portion"),
         ],
     }
-    client.post("/orders", json={"channel": "takeaway", "items": [line]})
-    assert lavas - _stock(session, "Lavaş") == 2  # 1.5 lavaş rounds up to 2 pieces
-    assert kiyma - _stock(session, "Dana Kıyma") == Decimal("0.3")  # weights stay exact
+    client.post("/orders", json={"channel": "pickup", "items": [line]})
+    assert flatbread - _stock(session, "Flatbread") == 2  # 1.5 flatbreads rounds up to 2 pieces
+    assert kiyma - _stock(session, "Ground Beef") == Decimal("0.3")  # weights stay exact
 
 
 def test_cancel_keeps_stock_used_unless_returned(client, session):
-    before = _stock(session, "Dana Kıyma")
+    before = _stock(session, "Ground Beef")
     table = free_table(client)
     order = client.post("/orders", json=_adana_order(client, table["id"])).json()
-    client.post(f"/orders/{order['id']}/cancel", json={"reason": "Müşteri gitti"})
-    assert before - _stock(session, "Dana Kıyma") == Decimal("0.4")  # food was prepared
+    client.post(f"/orders/{order['id']}/cancel", json={"reason": "Customer left"})
+    assert before - _stock(session, "Ground Beef") == Decimal("0.4")  # food was prepared
 
     table = free_table(client)
     order = client.post("/orders", json=_adana_order(client, table["id"])).json()
     client.post(
         f"/orders/{order['id']}/cancel",
-        json={"reason": "Mutfağa gitmeden iptal", "return_to_stock": True},
+        json={"reason": "Cancelled before it reached the kitchen", "return_to_stock": True},
     )
-    assert before - _stock(session, "Dana Kıyma") == Decimal("0.4")  # second order returned
+    assert before - _stock(session, "Ground Beef") == Decimal("0.4")  # second order returned
 
-    kiyma = session.exec(select(Ingredient).where(Ingredient.name == "Dana Kıyma")).one()
+    kiyma = session.exec(select(Ingredient).where(Ingredient.name == "Ground Beef")).one()
     returns = client.get(
         f"/inventory/ingredients/{kiyma.id}/movements", params={"reason": "returned"}
     ).json()
-    assert [(r["change"], r["note"]) for r in returns] == [(0.4, f"İade: Sipariş #{order['id']}")]
+    assert [(r["change"], r["note"]) for r in returns] == [(0.4, f"Refund: Order #{order['id']}")]
 
 
 def test_void_can_return_one_line_to_stock(client, session):
@@ -229,13 +230,13 @@ def test_void_can_return_one_line_to_stock(client, session):
     line = next(i for i in order["items"] if i["name"] == "Ayran")
     client.post(
         f"/orders/{order['id']}/items/{line['id']}/void",
-        json={"reason": "Yanlış giriş", "return_to_stock": True},
+        json={"reason": "Wrong entry", "return_to_stock": True},
     )
     assert _stock(session, "Ayran") - before == 3
 
 
 def test_seeded_count_ingredients_have_whole_stock(session):
-    for ing in session.exec(select(Ingredient).where(Ingredient.unit == "adet")).all():
+    for ing in session.exec(select(Ingredient).where(Ingredient.unit == "piece")).all():
         assert ing.stock_qty == ing.stock_qty.to_integral_value(), ing.name
 
 
@@ -243,7 +244,7 @@ def test_missing_required_option_says_ask_the_user(client):
     adana = client.get("/menu/items", params={"search": "adana"}).json()[0]
     r = client.post(
         "/orders",
-        json={"channel": "takeaway", "items": [{"menu_item_id": adana["id"], "quantity": 3}]},
+        json={"channel": "pickup", "items": [{"menu_item_id": adana["id"], "quantity": 3}]},
     )
     assert r.status_code == 422
     assert "do not choose for them" in r.json()["detail"]

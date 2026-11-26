@@ -14,6 +14,7 @@ from pos_api.db.models import (
     StaffRole,
     StockReason,
     TableStatus,
+    UserType,
 )
 
 # Decimals are exact internally but serialized as JSON numbers.
@@ -33,6 +34,17 @@ class StaffRead(Schema):
     name: str
     role: StaffRole
     is_active: bool
+
+
+# ---------- Customers ----------
+
+
+class UserRead(Schema):
+    id: int
+    type: UserType
+    name: str
+    email: str | None
+    created_at: datetime
 
 
 # ---------- Menu ----------
@@ -116,6 +128,7 @@ class OrderSummary(Schema):
     status: OrderStatus
     table: str | None
     staff: str | None
+    customer: str | None = None
     opened_at: datetime
     closed_at: datetime | None
     subtotal: Money
@@ -137,9 +150,10 @@ class OrderItemCreate(BaseModel):
 
 
 class OrderCreate(BaseModel):
-    channel: OrderChannel = OrderChannel.dine_in
+    channel: OrderChannel = OrderChannel.dineIn
     table_id: int | None = None
     staff_id: int | None = None
+    user_id: int | None = None
     items: list[OrderItemCreate] = Field(min_length=1, max_length=50)
 
 
@@ -187,7 +201,7 @@ class StockMovementRead(Schema):
 class PurchaseCreate(BaseModel):
     ingredient_id: int
     quantity: Decimal = Field(gt=0, le=10000)
-    note: str = Field(default="Manuel alım", max_length=200)
+    note: str = Field(default="Manual purchase", max_length=200)
 
 
 # ---------- Reports ----------
